@@ -1,0 +1,13 @@
+# Eigene Routen/Exporte nicht veröffentlichen (enthalten Strecke und Zeitstempel)
+*.gpx
+# … außer der synthetischen Testroute
+!tests/fixtures/*.gpx
+
+# temporäre Testdateien
+tests/.live*
+tests/.shot*
+
+# Editor/OS
+.vscode/
+.idea/
+.DS_Store

@@ -1,0 +1,1557 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PitStopPlanner</title>
+<!--
+  PitStopPlanner – Verpflegungspunkte entlang einer GPX-Route finden und als Wegpunkte exportieren.
+  Einzeldatei-App: per Doppelklick öffnen (file://), kein Server, kein Build.
+  Externe Bibliotheken (CDN): Leaflet (Karte), SunCalc + opening_hours.js (Öffnungszeiten).
+  Aufbau:
+    script#psp-core  reine Logik ohne DOM/Netzwerk (wird von tests/ direkt geladen und getestet)
+    script#psp-app   Oberfläche, Datenabruf (Overpass / Vektor-Tiles), Karte, Tabelle
+-->
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<!-- MapLibre + Leaflet-Brücke: OpenFreeMap-Hintergrundkarte für file:// (dort sendet der Browser keinen Referer,
+     den die OSM-Tile-Usage-Policy für tile.openstreetmap.org verlangt → 403 "Access blocked") -->
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/maplibre-gl@4.7.1/dist/maplibre-gl.css">
+<script src="https://cdn.jsdelivr.net/npm/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@maplibre/maplibre-gl-leaflet@0.0.22/leaflet-maplibre-gl.js"></script>
+<!-- opening_hours.js erwartet SunCalc als globale Variable -->
+<script src="https://cdn.jsdelivr.net/npm/suncalc@1.9.0/suncalc.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/opening_hours@3.16.0/build/opening_hours.js"></script>
+<style>
+  :root {
+    --bg: #f6f7f9; --panel: #ffffff; --text: #1d2330; --muted: #667085; --border: #d9dde5;
+    --accent: #2563eb; --warn-bg: #fff4e5; --warn-border: #f5a524; --err: #c62828; --ok: #2e7d32;
+    --water: #1e88e5; --shop: #2e9d4f; --food: #f57c00; --fuel: #d32f2f; --cand: #9e9e9e;
+    --row-sel: #eef5ff;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #14171d; --panel: #1d2129; --text: #e6e8ec; --muted: #9aa3b2; --border: #343a46;
+      --accent: #5b8cff; --warn-bg: #3a2c12; --warn-border: #c88a1d; --row-sel: #1f2c44;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; font: 14px/1.4 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+         background: var(--bg); color: var(--text); }
+  header { padding: 10px 16px; border-bottom: 1px solid var(--border); background: var(--panel);
+           display: flex; gap: 12px; align-items: baseline; flex-wrap: wrap; }
+  header h1 { font-size: 18px; margin: 0; }
+  header .sub { color: var(--muted); }
+  main { display: grid; grid-template-columns: 340px 1fr; gap: 12px; padding: 12px 16px; }
+  main > div { min-width: 0; }
+  @media (max-width: 900px) { main { grid-template-columns: 1fr; } }
+  .panel { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 12px; }
+  .panel h2 { font-size: 14px; margin: 0 0 8px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); }
+  .panel + .panel { margin-top: 12px; }
+  #drop { border: 2px dashed var(--border); border-radius: 8px; padding: 14px; text-align: center; cursor: pointer; }
+  #drop.over { border-color: var(--accent); background: var(--row-sel); }
+  #routeInfo { margin-top: 8px; color: var(--muted); }
+  #routeInfo b { color: var(--text); }
+  label { cursor: pointer; }
+  .row { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 6px 0; }
+  .row input[type=number] { width: 80px; }
+  input, button, select { font: inherit; color: inherit; }
+  input[type=number], input[type=date] { background: var(--bg); border: 1px solid var(--border); border-radius: 4px; padding: 3px 6px; }
+  table.types { width: 100%; border-collapse: collapse; }
+  table.types td { padding: 4px 2px; }
+  table.types td:last-child { text-align: right; white-space: nowrap; }
+  table.types input[type=number] { width: 64px; }
+  .dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 4px; vertical-align: middle; }
+  button { background: var(--accent); color: #fff; border: 0; border-radius: 6px; padding: 7px 12px; cursor: pointer; }
+  button.secondary { background: transparent; color: var(--text); border: 1px solid var(--border); }
+  button:disabled { opacity: .45; cursor: not-allowed; }
+  .btns { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+  #map { height: 62vh; min-height: 360px; border-radius: 8px; border: 1px solid var(--border); }
+  #progress { margin-top: 10px; }
+  #segChips { display: flex; flex-wrap: wrap; gap: 3px; margin: 6px 0; }
+  .chip { cursor: pointer; width: 18px; height: 14px; border-radius: 3px; background: var(--border); font-size: 9px; text-align: center; color: #fff; line-height: 14px; }
+  .chip.running { background: var(--accent); }
+  .chip.done { background: var(--ok); }
+  .chip.failed { background: var(--err); }
+  .chip.retry { background: var(--warn-border); }
+  .chip.tiles { background: #7b1fa2; }
+  #log { max-height: 110px; overflow: auto; font: 12px/1.35 ui-monospace, monospace; color: var(--muted); white-space: pre-wrap; }
+  .msg { padding: 8px 10px; border-radius: 6px; margin: 8px 0; border: 1px solid var(--warn-border); background: var(--warn-bg); }
+  .msg.err { border-color: var(--err); }
+  #results { padding: 0 16px 24px; }
+  .tablewrap { overflow-x: auto; background: var(--panel); border: 1px solid var(--border); border-radius: 8px; }
+  table.list { border-collapse: collapse; width: 100%; min-width: 720px; }
+  table.list th, table.list td { padding: 5px 8px; border-bottom: 1px solid var(--border); text-align: left; white-space: nowrap; }
+  table.list td.name { white-space: normal; }
+  table.list th { position: sticky; top: 0; background: var(--panel); }
+  table.list tr.sel { background: var(--row-sel); font-weight: 600; }
+  table.list tr.manual td:first-child::after { content: " ✎"; color: var(--muted); }
+  table.list tr:hover { outline: 1px solid var(--accent); cursor: pointer; }
+  td.num, th.num { text-align: right; }
+  .muted { color: var(--muted); }
+  .summary { display: flex; gap: 14px; flex-wrap: wrap; align-items: center; margin: 8px 0; }
+  .hidden { display: none !important; }
+  .pop-state { margin-top: 6px; font-weight: 600; }
+  .pop-toggle { margin-top: 6px; padding: 4px 10px; font-size: 13px; }
+  .leaflet-popup-content .pop-toggle.secondary { color: #333; border-color: #bbb; }
+</style>
+</head>
+<body>
+<header>
+  <h1>PitStopPlanner</h1>
+  <span class="sub">Verpflegung entlang deiner GPX-Route aus OpenStreetMap</span>
+</header>
+
+<main>
+  <div>
+    <!-- Datei laden -->
+    <section class="panel">
+      <h2>1. Route</h2>
+      <div id="drop" tabindex="0">
+        <b>GPX-Datei hierher ziehen</b><br><span class="muted">oder klicken zum Auswählen</span>
+        <input type="file" id="fileInput" accept=".gpx,application/gpx+xml" hidden>
+      </div>
+      <div id="routeInfo">Noch keine Route geladen.</div>
+    </section>
+
+    <!-- Einstellungen -->
+    <section class="panel" id="settingsPanel">
+      <h2>2. Einstellungen</h2>
+      <table class="types">
+        <tr><th></th><th></th><th class="muted" style="text-align:right;font-weight:normal">max. Abstand</th></tr>
+        <tr><td><input type="checkbox" id="en_water" checked></td><td><label for="en_water"><span class="dot" style="background:var(--water)"></span>Wasser</label></td><td><input type="number" id="d_water" min="1" step="1" value="15"> km</td></tr>
+        <tr><td><input type="checkbox" id="en_shop" checked></td><td><label for="en_shop"><span class="dot" style="background:var(--shop)"></span>Einkauf</label></td><td><input type="number" id="d_shop" min="1" step="1" value="30"> km</td></tr>
+        <tr><td><input type="checkbox" id="en_food" checked></td><td><label for="en_food"><span class="dot" style="background:var(--food)"></span>Restaurant / Café</label></td><td><input type="number" id="d_food" min="1" step="1" value="40"> km</td></tr>
+        <tr><td><input type="checkbox" id="en_fuel" checked></td><td><label for="en_fuel"><span class="dot" style="background:var(--fuel)"></span>Tankstelle</label></td><td><input type="number" id="d_fuel" min="1" step="1" value="40"> km</td></tr>
+      </table>
+      <div class="row"><label for="offTrack">max. Entfernung vom Track</label><span><input type="number" id="offTrack" min="10" step="10" value="300"> m</span></div>
+      <div class="row"><label for="rideDate">Fahrtag</label><input type="date" id="rideDate"></div>
+      <div class="row"><label><input type="checkbox" id="reverse"> Route umkehren</label></div>
+      <div class="row"><label><input type="checkbox" id="allPoints"> Alle Punkte (ohne Abstandsregel)</label></div>
+      <div class="btns">
+        <button id="searchBtn" disabled>Versorgungspunkte suchen</button>
+        <button id="cancelBtn" class="secondary hidden">Abbrechen</button>
+      </div>
+    </section>
+
+    <!-- Export -->
+    <section class="panel">
+      <h2>3. Export</h2>
+      <div class="row"><label><input type="checkbox" id="removeWpts"> vorhandene Wegpunkte entfernen</label></div>
+      <div class="btns">
+        <button id="downloadBtn" disabled>GPX herunterladen</button>
+        <button id="mdBtn" class="secondary" disabled>Liste als Markdown kopieren</button>
+      </div>
+      <div id="exportMsg" class="muted" style="margin-top:6px"></div>
+    </section>
+  </div>
+
+  <div>
+    <div id="map"></div>
+    <div id="progress" class="panel hidden">
+      <h2>Datenabruf</h2>
+      <div id="progressText"></div>
+      <div id="segChips"></div>
+      <div id="log"></div>
+    </div>
+  </div>
+</main>
+
+<section id="results" class="hidden">
+  <div id="warnings"></div>
+  <div class="summary">
+    <span id="countInfo"></span>
+    <label><input type="checkbox" id="onlySelected"> nur ausgewählte anzeigen</label>
+  </div>
+  <div class="tablewrap">
+    <table class="list">
+      <thead><tr>
+        <th class="num">km</th><th>Typ</th><th>Name</th><th>Öffnungszeiten</th>
+        <th class="num">Abstand (m)</th><th>Quelle</th><th>übernehmen</th>
+      </tr></thead>
+      <tbody id="tbody"></tbody>
+    </table>
+  </div>
+</section>
+
+<footer class="muted" style="padding: 0 16px 24px; font-size: 12px;">
+  Daten &copy; <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a>-Mitwirkende (ODbL),
+  abgefragt über öffentliche, ehrenamtlich betriebene Overpass-Server – bitte sparsam suchen.
+  Fallback-Daten und Karte: <a href="https://openfreemap.org" target="_blank" rel="noopener">OpenFreeMap</a>.
+  Alle Berechnungen laufen lokal im Browser; die GPX-Datei verlässt deinen Rechner nicht.
+  · <a href="https://github.com/kloeggaa/pitstopplanner" target="_blank" rel="noopener">Quellcode</a>
+</footer>
+
+<!-- ======================================================================
+     KERN-LOGIK (ohne DOM / Netzwerk) – wird auch von tests/ geladen
+     ====================================================================== -->
+<script id="psp-core">
+(function (root) {
+  'use strict';
+
+  /* ---------- Typen ---------- */
+  const TYPES = {
+    water: { name: 'Wasser',     sym: 'Drinking Water',  color: '#1e88e5', defaultD: 15 },
+    shop:  { name: 'Einkauf',    sym: 'Shopping Center', color: '#2e9d4f', defaultD: 30 },
+    food:  { name: 'Restaurant', sym: 'Restaurant',      color: '#f57c00', defaultD: 40 },
+    fuel:  { name: 'Tankstelle', sym: 'Gas Station',     color: '#d32f2f', defaultD: 40 },
+  };
+  const TYPE_ORDER = ['water', 'shop', 'food', 'fuel'];
+
+  /* ---------- Geometrie ---------- */
+  const R = 6371008.8; // mittlerer Erdradius in m
+  const RAD = Math.PI / 180;
+
+  /** Großkreis-Distanz in Metern */
+  function haversine(lat1, lon1, lat2, lon2) {
+    const dLat = (lat2 - lat1) * RAD, dLon = (lon2 - lon1) * RAD;
+    const a = Math.sin(dLat / 2) ** 2 + Math.cos(lat1 * RAD) * Math.cos(lat2 * RAD) * Math.sin(dLon / 2) ** 2;
+    return 2 * R * Math.asin(Math.min(1, Math.sqrt(a)));
+  }
+
+  /** Kumulierte Distanz in km für jeden Trackpunkt */
+  function cumulativeKm(pts) {
+    const cum = new Array(pts.length);
+    let s = 0;
+    for (let i = 0; i < pts.length; i++) {
+      if (i > 0) s += haversine(pts[i - 1].lat, pts[i - 1].lon, pts[i].lat, pts[i].lon) / 1000;
+      cum[i] = s;
+    }
+    return cum;
+  }
+
+  /**
+   * Gesamtanstieg in m. Kleine Schwankungen (< hysteresis) werden ignoriert,
+   * damit GPS-Rauschen den Wert nicht aufbläht. null, wenn keine Höhen vorhanden.
+   */
+  function totalAscent(pts, hysteresis = 3) {
+    let ref = null, up = 0, any = false;
+    for (const p of pts) {
+      if (p.ele == null || isNaN(p.ele)) continue;
+      any = true;
+      if (ref === null) { ref = p.ele; continue; }
+      const d = p.ele - ref;
+      if (d >= hysteresis) { up += d; ref = p.ele; }
+      else if (d <= -hysteresis) { ref = p.ele; }
+    }
+    return any ? up : null;
+  }
+
+  /** Track-Objekt: Punkte, kumulierte km, Länge, Anstieg, räumlicher Index */
+  function buildTrack(pts) {
+    const cum = cumulativeKm(pts);
+    const track = { pts, cum, length: cum.length ? cum[cum.length - 1] : 0, ascent: totalAscent(pts) };
+    track.index = buildTrackIndex(track);
+    return track;
+  }
+
+  /**
+   * Gitter-Index über die Track-Segmente (Zellgröße ~0,01°), damit die
+   * Lotfußpunkt-Suche bei 10.000 Punkten und Tausenden Kandidaten schnell bleibt.
+   */
+  function buildTrackIndex(track, cell = 0.01) {
+    const grid = new Map();
+    const pts = track.pts;
+    for (let i = 0; i < pts.length - 1; i++) {
+      const a = pts[i], b = pts[i + 1];
+      const x0 = Math.floor(Math.min(a.lon, b.lon) / cell), x1 = Math.floor(Math.max(a.lon, b.lon) / cell);
+      const y0 = Math.floor(Math.min(a.lat, b.lat) / cell), y1 = Math.floor(Math.max(a.lat, b.lat) / cell);
+      for (let x = x0; x <= x1; x++) for (let y = y0; y <= y1; y++) {
+        const k = x + ',' + y;
+        let arr = grid.get(k);
+        if (!arr) grid.set(k, arr = []);
+        arr.push(i);
+      }
+    }
+    return { grid, cell };
+  }
+
+  /**
+   * Senkrechter Abstand eines Punkts zum Track (Punkt-zu-Segment, lokale
+   * equirektanguläre Projektion) und Position entlang der Route.
+   * Liefert {distM, km} des nächstgelegenen Segments oder null, wenn kein
+   * Segment näher als maxDistM ist.
+   */
+  function projectToTrack(track, lat, lon, maxDistM) {
+    const { grid, cell } = track.index;
+    const pts = track.pts, cum = track.cum;
+    if (pts.length === 1) {
+      const d = haversine(lat, lon, pts[0].lat, pts[0].lon);
+      return d <= maxDistM ? { distM: d, km: 0 } : null;
+    }
+    const dLat = maxDistM / 111320, dLon = maxDistM / (111320 * Math.max(0.01, Math.cos(lat * RAD)));
+    const x0 = Math.floor((lon - dLon) / cell), x1 = Math.floor((lon + dLon) / cell);
+    const y0 = Math.floor((lat - dLat) / cell), y1 = Math.floor((lat + dLat) / cell);
+    const seen = new Set();
+    const kx = Math.cos(lat * RAD) * R * RAD, ky = R * RAD; // Meter pro Grad
+    let best = null;
+    for (let x = x0; x <= x1; x++) for (let y = y0; y <= y1; y++) {
+      const arr = grid.get(x + ',' + y);
+      if (!arr) continue;
+      for (const i of arr) {
+        if (seen.has(i)) continue;
+        seen.add(i);
+        const a = pts[i], b = pts[i + 1];
+        const ax = (a.lon - lon) * kx, ay = (a.lat - lat) * ky;
+        const bx = (b.lon - lon) * kx, by = (b.lat - lat) * ky;
+        const vx = bx - ax, vy = by - ay;
+        const len2 = vx * vx + vy * vy;
+        let t = len2 > 0 ? -(ax * vx + ay * vy) / len2 : 0;
+        t = Math.max(0, Math.min(1, t));
+        const px = ax + t * vx, py = ay + t * vy;
+        const d = Math.sqrt(px * px + py * py);
+        if (d <= maxDistM && (!best || d < best.distM)) {
+          best = { distM: d, km: cum[i] + t * (cum[i + 1] - cum[i]) };
+        }
+      }
+    }
+    return best;
+  }
+
+  /** Bounding Box um Punkte, erweitert um marginM Meter: {s,w,n,e} */
+  function bboxOf(pts, marginM = 0) {
+    let s = 90, n = -90, w = 180, e = -180;
+    for (const p of pts) {
+      if (p.lat < s) s = p.lat; if (p.lat > n) n = p.lat;
+      if (p.lon < w) w = p.lon; if (p.lon > e) e = p.lon;
+    }
+    const dLat = marginM / 111320;
+    const dLon = marginM / (111320 * Math.max(0.01, Math.cos(((s + n) / 2) * RAD)));
+    return { s: s - dLat, w: w - dLon, n: n + dLat, e: e + dLon };
+  }
+
+  /** Route in Abschnitte von ~segKm km teilen (Abschnitte teilen sich den Grenzpunkt) */
+  function splitSegments(track, segKm = 10, marginM = 0) {
+    const segs = [];
+    const { pts, cum } = track;
+    if (!pts.length) return segs;
+    let start = 0;
+    for (let i = 1; i < pts.length; i++) {
+      if (cum[i] - cum[start] >= segKm || i === pts.length - 1) {
+        const part = pts.slice(start, i + 1);
+        segs.push({ fromKm: cum[start], toKm: cum[i], from: start, to: i, bbox: bboxOf(part, marginM) });
+        start = i;
+      }
+    }
+    if (!segs.length) segs.push({ fromKm: 0, toKm: 0, from: 0, to: pts.length - 1, bbox: bboxOf(pts, marginM) });
+    return segs;
+  }
+
+  /**
+   * Linie vereinfachen (Douglas-Peucker, Toleranz in m), damit die Overpass-Abfrage kurz bleibt.
+   * Jeder Originalpunkt liegt höchstens tolM von der vereinfachten Linie entfernt.
+   */
+  function simplifyPath(pts, tolM = 25) {
+    if (pts.length <= 2) return pts.slice();
+    const lat0 = pts[0].lat * RAD, kx = Math.cos(lat0) * R * RAD, ky = R * RAD;
+    const xy = pts.map(p => [p.lon * kx, p.lat * ky]);
+    const keep = new Uint8Array(pts.length); keep[0] = keep[pts.length - 1] = 1;
+    const stack = [[0, pts.length - 1]];
+    while (stack.length) {
+      const [a, b] = stack.pop();
+      const [ax, ay] = xy[a], [bx, by] = xy[b];
+      const vx = bx - ax, vy = by - ay, len2 = vx * vx + vy * vy;
+      let maxD = -1, idx = -1;
+      for (let i = a + 1; i < b; i++) {
+        const [px, py] = xy[i];
+        let t = len2 ? ((px - ax) * vx + (py - ay) * vy) / len2 : 0;
+        t = Math.max(0, Math.min(1, t));
+        const d = Math.hypot(px - (ax + t * vx), py - (ay + t * vy));
+        if (d > maxD) { maxD = d; idx = i; }
+      }
+      if (maxD > tolM) { keep[idx] = 1; stack.push([a, idx], [idx, b]); }
+    }
+    return pts.filter((p, i) => keep[i]);
+  }
+
+  /** Overpass-Filter je Typ (nur die abgefragten Typen landen in der Abfrage) */
+  const OVERPASS_FILTERS = {
+    water: ['nwr["amenity"~"^(drinking_water|water_point)$"]', 'nwr["man_made"="water_tap"]',
+            'nwr["amenity"="fountain"]["drinking_water"="yes"]', 'nwr["natural"="spring"]["drinking_water"="yes"]'],
+    shop:  ['nwr["shop"~"^(supermarket|convenience|bakery|kiosk|butcher|greengrocer|farm|deli|beverages)$"]',
+            'nwr["amenity"="vending_machine"]["vending"]'],
+    food:  ['nwr["amenity"~"^(restaurant|cafe|fast_food|biergarten)$"]'],
+    fuel:  ['nwr["amenity"="fuel"]'],
+  };
+  /**
+   * Overpass-Abfrage für einen Abschnitt: nur die gewünschten Typen, nur im Korridor
+   * (around: Radius um die vereinfachte Track-Linie), zusätzlich durch die Bounding Box begrenzt.
+   */
+  function buildOverpassQuery(types, bbox, line, radiusM) {
+    const bb = [bbox.s, bbox.w, bbox.n, bbox.e].map(v => v.toFixed(5)).join(',');
+    const around = '(around:' + Math.round(radiusM) + ',' + line.map(p => p.lat.toFixed(5) + ',' + p.lon.toFixed(5)).join(',') + ')';
+    const stmts = [];
+    for (const t of types) for (const f of OVERPASS_FILTERS[t]) stmts.push('  ' + f + around + ';');
+    return '[out:json][timeout:50][bbox:' + bb + '];\n(\n' + stmts.join('\n') + '\n);\nout center tags;';
+  }
+
+  /* ---------- OSM-Klassifizierung ---------- */
+  const SHOP_LABELS = {
+    supermarket: 'Supermarkt', convenience: 'Laden', greengrocer: 'Laden', deli: 'Laden', beverages: 'Laden',
+    bakery: 'Bäckerei', kiosk: 'Kiosk', butcher: 'Metzgerei', farm: 'Hofladen',
+  };
+  const FOOD_LABELS = { restaurant: 'Restaurant', biergarten: 'Restaurant', cafe: 'Café', fast_food: 'Imbiss' };
+  const FUEL_BAD_NAME = /kunden|betriebs|tankkarte|nur\s+mit\s+karte|card\s*only|lkw|truck|bundeswehr|werkstank/i;
+  const FUEL_BAD_ACCESS = /^(private|customers|no|permit|delivery|agricultural|forestry)$/;
+  const FLEET_CARD_KEYS = /^payment:(dkv|uta|fuel_cards|fleet_cards|e100|shell_card|aral_card|routex|eurowag|as24|tankpool24|ids|logpay|bp_plus)$/;
+  const PUBLIC_PAYMENT_KEYS = /^payment:(cash|coins|notes|debit_cards|credit_cards|girocard|maestro|mastercard|visa|v_pay|contactless|american_express|apple_pay|google_pay)$/;
+
+  /**
+   * Ordnet OSM-Tags einem Versorgungstyp zu.
+   * Rückgabe {type, label} oder null (nicht relevant / ausgeschlossen).
+   */
+  function classifyOsm(tags) {
+    if (!tags) return null;
+    const a = tags.amenity, shop = tags.shop;
+    const access = tags.access || '';
+    if (access === 'private' || access === 'no') return null;
+
+    // Tankstelle
+    if (a === 'fuel') {
+      if (FUEL_BAD_ACCESS.test(access)) return null;
+      if (tags.hgv === 'only') return null;
+      const text = [tags.name, tags.operator, tags.brand, tags.description, tags.note].filter(Boolean).join(' ');
+      if (FUEL_BAD_NAME.test(text)) return null;
+      // reine Ladesäulen-Einträge
+      if (tags['fuel:electricity'] === 'yes' && !Object.keys(tags).some(k => k.startsWith('fuel:') && k !== 'fuel:electricity' && tags[k] === 'yes')
+          && /lade|charg/i.test(text)) return null;
+      // nur Flottenkarten akzeptiert, keine öffentlichen Zahlungsmittel
+      const keys = Object.keys(tags);
+      const fleet = keys.some(k => FLEET_CARD_KEYS.test(k) && tags[k] === 'yes');
+      const pub = keys.some(k => PUBLIC_PAYMENT_KEYS.test(k) && tags[k] === 'yes');
+      if (fleet && !pub) return null;
+      return { type: 'fuel', label: 'Tankstelle' };
+    }
+    // Restaurant / Café / Imbiss
+    if (FOOD_LABELS[a]) return { type: 'food', label: FOOD_LABELS[a] };
+    // Läden
+    if (SHOP_LABELS[shop]) return { type: 'shop', label: SHOP_LABELS[shop] };
+    if (a === 'vending_machine') {
+      if (/food|drink|milk|bread/i.test(tags.vending || '')) return { type: 'shop', label: 'Automat' };
+      return null;
+    }
+    // Wasser
+    if (tags.drinking_water === 'no') return null;
+    if (a === 'drinking_water' || a === 'water_point' || tags.man_made === 'water_tap')
+      return { type: 'water', label: 'Trinkwasser' };
+    if (a === 'fountain' && tags.drinking_water === 'yes') return { type: 'water', label: 'Brunnen' };
+    if (tags.natural === 'spring' && tags.drinking_water === 'yes') return { type: 'water', label: 'Quelle' };
+    return null;
+  }
+
+  /** Anzeigename aus Tags (name → name:de → brand), leer wenn unbekannt */
+  function osmName(tags) {
+    return (tags && (tags.name || tags['name:de'] || tags.brand) || '').trim();
+  }
+
+  /** OpenMapTiles-POI (Layer "poi") → Typ. Diese Punkte haben keine Öffnungszeiten. */
+  const TILE_MAP = {
+    fuel: ['fuel', 'Tankstelle'],
+    supermarket: ['shop', 'Supermarkt'], convenience: ['shop', 'Laden'], greengrocer: ['shop', 'Laden'],
+    deli: ['shop', 'Laden'], beverages: ['shop', 'Laden'], bakery: ['shop', 'Bäckerei'], kiosk: ['shop', 'Kiosk'],
+    butcher: ['shop', 'Metzgerei'], farm: ['shop', 'Hofladen'],
+    cafe: ['food', 'Café'], restaurant: ['food', 'Restaurant'], fast_food: ['food', 'Imbiss'], biergarten: ['food', 'Restaurant'],
+    drinking_water: ['water', 'Trinkwasser'],
+  };
+  function classifyTilePoi(props) {
+    // Nur subclass verwenden: class "fuel" umfasst z. B. auch subclass "charging_station"
+    const m = TILE_MAP[props.subclass];
+    return m ? { type: m[0], label: m[1] } : null;
+  }
+
+  /* ---------- Mapbox-Vector-Tile-Decoder (minimal, nur was wir brauchen) ---------- */
+  function PbfReader(buf) { this.buf = buf; this.pos = 0; this.view = new DataView(buf.buffer, buf.byteOffset, buf.byteLength); }
+  PbfReader.prototype.varint = function () {
+    let val = 0, mul = 1, b;
+    do { b = this.buf[this.pos++]; val += (b & 0x7f) * mul; mul *= 128; } while (b & 0x80);
+    return val;
+  };
+  PbfReader.prototype.bytes = function () { const len = this.varint(); const s = this.pos; this.pos += len; return this.buf.subarray(s, s + len); };
+  PbfReader.prototype.skip = function (wire) {
+    if (wire === 0) this.varint(); else if (wire === 1) this.pos += 8;
+    else if (wire === 2) this.pos += this.varint(); else if (wire === 5) this.pos += 4;
+    else throw new Error('Unbekannter Wire-Typ ' + wire);
+  };
+  const utf8 = typeof TextDecoder !== 'undefined' ? new TextDecoder('utf-8') : null;
+  function readString(r) { return utf8.decode(r.bytes()); }
+  function packed(r) { const end = r.varint() + r.pos, out = []; while (r.pos < end) out.push(r.varint()); return out; }
+  const zigzag = n => (n % 2 === 1 ? -(n + 1) / 2 : n / 2);
+
+  function decodeValue(r) {
+    const end = r.varint() + r.pos; let v = null;
+    while (r.pos < end) {
+      const tag = r.varint(), f = tag >> 3, w = tag & 7;
+      if (f === 1) v = readString(r);
+      else if (f === 2) { v = r.view.getFloat32(r.pos, true); r.pos += 4; }
+      else if (f === 3) { v = r.view.getFloat64(r.pos, true); r.pos += 8; }
+      else if (f === 4 || f === 5) v = r.varint();
+      else if (f === 6) v = zigzag(r.varint());
+      else if (f === 7) v = !!r.varint();
+      else r.skip(w);
+    }
+    return v;
+  }
+
+  /**
+   * Dekodiert einen Layer einer Vektor-Kachel.
+   * Rückgabe {extent, features:[{type, props, points:[[x,y],…]}]} oder null.
+   */
+  function decodeMvtLayer(u8, layerName) {
+    const r = new PbfReader(u8);
+    while (r.pos < u8.length) {
+      const tag = r.varint(), f = tag >> 3, w = tag & 7;
+      if (f !== 3 || w !== 2) { r.skip(w); continue; }
+      const end = r.varint() + r.pos;
+      let name = null, extent = 4096; const keys = [], values = [], rawFeatures = [];
+      while (r.pos < end) {
+        const t = r.varint(), lf = t >> 3, lw = t & 7;
+        if (lf === 1) name = readString(r);
+        else if (lf === 2) rawFeatures.push(r.bytes());
+        else if (lf === 3) keys.push(readString(r));
+        else if (lf === 4) values.push(decodeValue(r));
+        else if (lf === 5) extent = r.varint();
+        else r.skip(lw);
+      }
+      if (name !== layerName) continue;
+      const features = rawFeatures.map(fb => {
+        const fr = new PbfReader(fb); let tags = [], geom = [], type = 0;
+        while (fr.pos < fb.length) {
+          const t = fr.varint(), ff = t >> 3, fw = t & 7;
+          if (ff === 2) tags = packed(fr); else if (ff === 3) type = fr.varint();
+          else if (ff === 4) geom = packed(fr); else fr.skip(fw);
+        }
+        const props = {};
+        for (let i = 0; i + 1 < tags.length; i += 2) props[keys[tags[i]]] = values[tags[i + 1]];
+        // Geometrie: nur MoveTo-Punkte (POIs sind Punkte); bei anderen Typen erster Punkt
+        const points = []; let x = 0, y = 0, i = 0;
+        while (i < geom.length) {
+          const cmd = geom[i] & 7, count = geom[i] >> 3; i++;
+          if (cmd === 1 || cmd === 2) {
+            for (let c = 0; c < count; c++) {
+              x += zigzag(geom[i++]); y += zigzag(geom[i++]);
+              if (cmd === 1) points.push([x, y]);
+            }
+          }
+        }
+        return { type, props, points };
+      });
+      return { extent, features };
+    }
+    return null;
+  }
+
+  /** Kachel-Koordinaten ↔ Länge/Breite (Web-Mercator) */
+  function lonLatToTile(lon, lat, z) {
+    const n = 2 ** z;
+    const x = Math.floor((lon + 180) / 360 * n);
+    const y = Math.floor((1 - Math.log(Math.tan(lat * RAD) + 1 / Math.cos(lat * RAD)) / Math.PI) / 2 * n);
+    return { x: Math.max(0, Math.min(n - 1, x)), y: Math.max(0, Math.min(n - 1, y)) };
+  }
+  function tilePointToLonLat(x, y, z, px, py, extent) {
+    const n = 2 ** z;
+    const lon = (x + px / extent) / n * 360 - 180;
+    const m = Math.PI - 2 * Math.PI * (y + py / extent) / n;
+    return { lon, lat: Math.atan(Math.sinh(m)) / RAD };
+  }
+  /** Alle Kacheln (z), die die Bounding-Boxen schneiden – eindeutig */
+  function tilesForBboxes(bboxes, z = 14) {
+    const out = new Map();
+    for (const b of bboxes) {
+      const a = lonLatToTile(b.w, b.n, z), c = lonLatToTile(b.e, b.s, z);
+      for (let x = a.x; x <= c.x; x++) for (let y = a.y; y <= c.y; y++) out.set(x + '/' + y, { z, x, y });
+    }
+    return [...out.values()];
+  }
+
+  /* ---------- Deduplizierung ---------- */
+  /**
+   * Entfernt Punkte gleichen Typs innerhalb von radiusM (Overpass bevorzugt).
+   * Erwartet Objekte {type, lat, lon, source}.
+   */
+  function dedupe(points, radiusM = 60) {
+    const sorted = points.slice().sort((a, b) => (a.source === 'overpass' ? 0 : 1) - (b.source === 'overpass' ? 0 : 1));
+    const kept = [];
+    const cell = 0.001, grid = new Map(); // ~110 m Zellen
+    const key = (x, y) => x + ',' + y;
+    for (const p of sorted) {
+      const cx = Math.floor(p.lon / cell), cy = Math.floor(p.lat / cell);
+      let dup = false;
+      for (let x = cx - 1; x <= cx + 1 && !dup; x++) for (let y = cy - 1; y <= cy + 1 && !dup; y++) {
+        for (const q of grid.get(key(x, y)) || []) {
+          if (q.type === p.type && haversine(p.lat, p.lon, q.lat, q.lon) <= radiusM) { dup = true; break; }
+        }
+      }
+      if (dup) continue;
+      kept.push(p);
+      const k = key(cx, cy);
+      if (!grid.has(k)) grid.set(k, []);
+      grid.get(k).push(p);
+    }
+    return kept;
+  }
+
+  /* ---------- Öffnungszeiten ---------- */
+  function fmtTime(d, dayEnd) {
+    if (d >= dayEnd) return '24:00';
+    return d.getHours() + ':' + String(d.getMinutes()).padStart(2, '0');
+  }
+  /**
+   * Öffnungszeiten für einen Tag auswerten.
+   * OH = opening_hours-Konstruktor (oder null), date = Date (lokaler Tag).
+   * Rückgabe {text, state}: state ∈ 'open' | 'closed' | 'unknown'.
+   */
+  function hoursForDay(OH, value, lat, lon, date, countryCode) {
+    if (!OH || !value) return { text: '?', state: 'unknown' };
+    try {
+      // Land für Feiertage (PH): aus addr:country, sonst Deutschland
+      const cc = /^[a-z]{2}$/i.test(countryCode || '') ? countryCode.toLowerCase() : 'de';
+      const oh = new OH(value, { lat, lon, address: { country_code: cc, state: '' } }, { tag_key: 'opening_hours' });
+      const from = new Date(date.getFullYear(), date.getMonth(), date.getDate());
+      const to = new Date(date.getFullYear(), date.getMonth(), date.getDate() + 1);
+      const iv = oh.getOpenIntervals(from, to);
+      if (!iv.length) return { text: 'zu', state: 'closed' };
+      if (iv.length === 1 && iv[0][0] <= from && iv[0][1] >= to) return { text: '24h', state: 'open' };
+      return { text: iv.map(i => fmtTime(i[0], to) + '-' + fmtTime(i[1], to)).join(','), state: 'open' };
+    } catch (e) {
+      return { text: '?', state: 'unknown' };
+    }
+  }
+
+  /* ---------- Auswahl-Algorithmus ---------- */
+  const OPEN_RANK = { open: 2, unknown: 1, closed: 0 };
+  /** Tie-Breaker: geöffnet > bekannter Name > näher am Track */
+  function better(a, b) {
+    const oa = OPEN_RANK[a.openState] ?? 1, ob = OPEN_RANK[b.openState] ?? 1;
+    if (oa !== ob) return oa > ob;
+    if (!!a.hasName !== !!b.hasName) return !!a.hasName;
+    return a.distM < b.distM;
+  }
+  function pickBest(group) { return group.reduce((best, c) => (better(c, best) ? c : best)); }
+
+  /**
+   * Wählt Punkte eines Typs nach der Abstandsregel.
+   * cands: [{km, distM, openState, hasName, …}], D: max. Abstand (km), L: Routenlänge (km).
+   * Rückgabe: Array der gewählten Kandidaten (aufsteigend nach km).
+   */
+  function selectPoints(cands, D, L, tieM = 200) {
+    const sorted = cands.slice().sort((a, b) => a.km - b.km);
+    const sel = [];
+    if (!(D > 0)) return sel;
+    const tie = tieM / 1000;
+    let p = 0;
+    for (;;) {
+      const t = p + D;
+      if (t >= L) break;                          // Ziel erreichbar
+      const lo = p + D / 5;
+      const win = sorted.filter(c => c.km >= lo && c.km <= t);
+      let chosen;
+      if (win.length) {                           // rückwärts: größter km im Fenster
+        const maxKm = win[win.length - 1].km;
+        chosen = pickBest(win.filter(c => c.km >= maxKm - tie));
+      } else {                                    // vorwärts: erster Kandidat nach t
+        const after = sorted.filter(c => c.km > t && c.km < L);
+        if (!after.length) break;
+        const minKm = after[0].km;
+        chosen = pickBest(after.filter(c => c.km <= minKm + tie));
+      }
+      sel.push(chosen);
+      p = chosen.km;
+    }
+    return sel;
+  }
+
+  /**
+   * Wie selectPoints, aber für eine nur teilweise abgefragte Route ("Abfrage folgt dem Algorithmus").
+   * segs: Abschnitte [{fromKm, toKm}], aufsteigend und lückenlos; fetched(k) → true, wenn Abschnitt k
+   * schon abgefragt ist. Rückwärts wird ab dem Abschnitt bei t abwärts gesucht, vorwärts aufwärts.
+   * Sobald ein benötigter Abschnitt fehlt, wird abgebrochen.
+   * Rückgabe {sel, need}: need = Index des als Nächstes abzufragenden Abschnitts oder -1 (fertig).
+   * Sind alle Abschnitte abgefragt, ist sel identisch mit selectPoints().
+   */
+  function selectPointsLazy(cands, D, L, segs, fetched, tieM = 200) {
+    const sorted = cands.slice().sort((a, b) => a.km - b.km);
+    const sel = [];
+    if (!(D > 0) || !segs.length) return { sel, need: -1 };
+    const tie = tieM / 1000;
+    const segAt = km => { for (let k = 0; k < segs.length; k++) if (km <= segs[k].toKm) return k; return segs.length - 1; };
+    // erster fehlender Abschnitt im km-Bereich [a, b] (von oben oder von unten gesucht)
+    const missing = (a, b, desc) => {
+      const k0 = segAt(a), k1 = segAt(b);
+      if (desc) { for (let k = k1; k >= k0; k--) if (!fetched(k)) return k; }
+      else { for (let k = k0; k <= k1; k++) if (!fetched(k)) return k; }
+      return -1;
+    };
+    let p = 0;
+    for (;;) {
+      const t = p + D;
+      if (t >= L) break;                                   // Ziel erreichbar
+      const lo = p + D / 5;
+      let chosen = null;
+      // rückwärts: Abschnitt bei t zuerst, dann abwärts bis p + D/5
+      for (let k = segAt(t); k >= segAt(lo) && !chosen; k--) {
+        if (!fetched(k)) return { sel, need: k };
+        const a = Math.max(lo, segs[k].fromKm), b = Math.min(t, segs[k].toKm);
+        const inSeg = sorted.filter(c => c.km >= a && c.km <= b);
+        if (!inSeg.length) continue;
+        const maxKm = inSeg[inSeg.length - 1].km, tieLo = Math.max(lo, maxKm - tie);
+        const m = missing(tieLo, maxKm, true);             // Tie-Breaker-Bereich kann in den Vorabschnitt reichen
+        if (m >= 0) return { sel, need: m };
+        chosen = pickBest(sorted.filter(c => c.km >= tieLo && c.km <= maxKm));
+      }
+      // vorwärts: erster Kandidat nach t
+      if (!chosen) {
+        for (let k = segAt(t); k < segs.length && !chosen; k++) {
+          if (!fetched(k)) return { sel, need: k };
+          const inSeg = sorted.filter(c => c.km > t && c.km < L && c.km >= segs[k].fromKm && c.km <= segs[k].toKm);
+          if (!inSeg.length) continue;
+          const minKm = inSeg[0].km;
+          const m = missing(minKm, Math.min(minKm + tie, L), false);
+          if (m >= 0) return { sel, need: m };
+          chosen = pickBest(sorted.filter(c => c.km > t && c.km < L && c.km <= minKm + tie));
+        }
+        if (!chosen) break;                                // bis zum Ziel nichts mehr
+      }
+      sel.push(chosen);
+      p = chosen.km;
+    }
+    return { sel, need: -1 };
+  }
+
+  /** Abschnitte der Original-Richtung in die aktuelle Fahrtrichtung umrechnen ({fromKm,toKm,orig}) */
+  function orientSegments(segs, L, reversed) {
+    const out = segs.map((s, i) => (reversed
+      ? { fromKm: Math.max(0, L - s.toKm), toKm: Math.max(0, L - s.fromKm), orig: i }
+      : { fromKm: s.fromKm, toKm: s.toKm, orig: i }));
+    return reversed ? out.reverse() : out;
+  }
+
+  /** Längste Lücke (km) inkl. Start→erster und letzter→Ziel */
+  function longestGap(kms, L) {
+    const s = [0, ...kms.slice().sort((a, b) => a - b), L];
+    let best = { gap: 0, fromKm: 0, toKm: L };
+    for (let i = 1; i < s.length; i++) {
+      const g = s[i] - s[i - 1];
+      if (g > best.gap) best = { gap: g, fromKm: s[i - 1], toKm: s[i] };
+    }
+    return best;
+  }
+
+  /* ---------- GPX-Text (Import/Export, textbasiert für byte-identische Tracks) ---------- */
+  /** Datei-Bytes dekodieren, Encoding aus der XML-Deklaration lesen */
+  function decodeFile(buf) {
+    const u8 = buf instanceof Uint8Array ? buf : new Uint8Array(buf);
+    const head = String.fromCharCode.apply(null, u8.subarray(0, 300));
+    const m = /<\?xml[^>]*encoding\s*=\s*["']([^"']+)["']/i.exec(head);
+    let enc = m ? m[1].toLowerCase() : 'utf-8';
+    let text;
+    try { text = new TextDecoder(enc).decode(u8); } catch (e) { enc = 'utf-8'; text = new TextDecoder('utf-8').decode(u8); }
+    return { text, encoding: enc };
+  }
+
+  /** Trackpunkte aus einem GPX-XML-Dokument (trkpt bevorzugt, sonst rtept) */
+  function parseGpxDoc(doc) {
+    if (doc.getElementsByTagName('parsererror').length) throw new Error('Die Datei ist kein gültiges XML.');
+    let nodes = doc.getElementsByTagNameNS('*', 'trkpt');
+    let kind = 'trk';
+    if (!nodes.length) { nodes = doc.getElementsByTagNameNS('*', 'rtept'); kind = 'rte'; }
+    const pts = [];
+    for (const n of nodes) {
+      const lat = parseFloat(n.getAttribute('lat')), lon = parseFloat(n.getAttribute('lon'));
+      if (isNaN(lat) || isNaN(lon)) continue;
+      const eleEl = n.getElementsByTagNameNS('*', 'ele')[0];
+      const ele = eleEl ? parseFloat(eleEl.textContent) : null;
+      pts.push({ lat, lon, ele: isNaN(ele) ? null : ele });
+    }
+    if (pts.length < 2) throw new Error('Keine Track- oder Routenpunkte gefunden.');
+    return { pts, kind, wptCount: doc.getElementsByTagNameNS('*', 'wpt').length };
+  }
+
+  const blockRe = tag => new RegExp('<' + tag + '(?=[\\s>/])[^>]*?(?:/>|>[\\s\\S]*?</' + tag + '>)', 'g');
+
+  /** Reihenfolge aller <tag>-Blöcke in text umkehren; Text dazwischen bleibt an seiner Stelle */
+  function reverseBlocks(text, tag) {
+    const re = blockRe(tag), parts = [], blocks = [];
+    let last = 0, m;
+    while ((m = re.exec(text))) { parts.push(text.slice(last, m.index)); blocks.push(m[0]); last = m.index + m[0].length; }
+    if (blocks.length < 2) return text;
+    let out = '';
+    for (let i = 0; i < blocks.length; i++) out += parts[i] + blocks[blocks.length - 1 - i];
+    return out + text.slice(last);
+  }
+
+  /** Alle <time>-Elemente entfernen (ganze Zeilen inkl. Umbruch, sonst inline) */
+  function stripTimes(text) {
+    return text
+      .replace(/^[ \t]*<time\b[^>]*>[\s\S]*?<\/time>[ \t]*\r?\n/gm, '')
+      .replace(/<time\b[^>]*>[\s\S]*?<\/time>/g, '')
+      .replace(/<time\b[^>]*\/>/g, '');
+  }
+
+  /** GPX-Text umkehren: Punkte in Segmenten, Segmente in Tracks, Tracks/Routen; ohne <time> */
+  function reverseGpxText(text) {
+    let out = text.replace(blockRe('trk'), trk =>
+      reverseBlocks(trk.replace(blockRe('trkseg'), seg => reverseBlocks(seg, 'trkpt')), 'trkseg'));
+    out = reverseBlocks(out, 'trk');
+    out = out.replace(blockRe('rte'), rte => reverseBlocks(rte, 'rtept'));
+    out = reverseBlocks(out, 'rte');
+    return stripTimes(out);
+  }
+
+  /** Vorhandene <wpt>-Elemente entfernen */
+  function removeWpts(text) {
+    return text
+      .replace(/^[ \t]*<wpt\b[^>]*?(?:\/>|>[\s\S]*?<\/wpt>)[ \t]*\r?\n/gm, '')
+      .replace(/<wpt\b[^>]*?(?:\/>|>[\s\S]*?<\/wpt>)/g, '');
+  }
+
+  /** XML-Deklaration auf UTF-8 setzen (wir schreiben immer UTF-8) */
+  function forceUtf8Declaration(text) {
+    return text.replace(/^(﻿?<\?xml[^>]*encoding\s*=\s*)(["'])[^"']*\2/i, '$1$2UTF-8$2');
+  }
+
+  function xmlEscape(s) {
+    return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;').replace(/'/g, '&apos;');
+  }
+
+  /** Wegpunkt-Name: "Name (Typ), KMkm, HOURS" */
+  function wptName(name, label, km, hours) {
+    return (name || label) + ' (' + label + '), ' + Math.round(km) + 'km, ' + hours;
+  }
+
+  /** Beschreibung für <desc> */
+  function wptDesc(p, dateLabel) {
+    let d = 'Öffnungszeiten ' + dateLabel + ': ' + p.hours + '; Abstand zum Track: ' + Math.round(p.distM) + ' m; Quelle: '
+      + (p.source === 'overpass' ? 'OSM (Overpass)' : 'OSM (Vektor-Tiles)');
+    if (p.type === 'water') d += '; im Winter evtl. abgestellt';
+    return d;
+  }
+
+  /** <wpt>-Element als Text (GPX 1.1 Kind-Reihenfolge: name, desc, sym, type) */
+  function wptXml(p, dateLabel, indent = '  ', nl = '\n') {
+    const i2 = indent + '  ';
+    return '<wpt lat="' + p.lat.toFixed(7) + '" lon="' + p.lon.toFixed(7) + '">' + nl
+      + i2 + '<name>' + xmlEscape(wptName(p.name, p.label, p.km, p.hours)) + '</name>' + nl
+      + i2 + '<desc>' + xmlEscape(wptDesc(p, dateLabel)) + '</desc>' + nl
+      + i2 + '<sym>' + xmlEscape(TYPES[p.type].sym) + '</sym>' + nl
+      + i2 + '<type>' + xmlEscape(p.label) + '</type>' + nl
+      + indent + '</wpt>';
+  }
+
+  /** Wegpunkte direkt vor dem ersten <rte>/<trk> einfügen (sonst vor </gpx>) */
+  function insertWpts(text, points, dateLabel) {
+    if (!points.length) return text;
+    const nl = text.includes('\r\n') ? '\r\n' : '\n';
+    let m = /<(?:rte|trk)(?=[\s>])/.exec(text) || /<\/gpx>/.exec(text);
+    if (!m) throw new Error('Kein <trk>, <rte> oder </gpx> gefunden.');
+    const idx = m.index;
+    const lineStart = text.lastIndexOf('\n', idx - 1) + 1;
+    const before = text.slice(lineStart, idx);
+    const indent = /^[ \t]*$/.test(before) ? before : '';
+    const block = points.map(p => wptXml(p, dateLabel, indent, nl) + nl + indent).join('');
+    // Ohne eigene Zeile für <trk> sauber umbrechen
+    const prefix = indent || before === '' ? '' : nl + '  ';
+    return text.slice(0, idx) + prefix + block + text.slice(idx);
+  }
+
+  /** Komplette Export-Pipeline */
+  function buildExport(opts) {
+    let text = opts.text;
+    if (opts.reversed) text = reverseGpxText(text);
+    if (opts.removeExisting) text = removeWpts(text);
+    text = forceUtf8Declaration(text);
+    const pts = opts.points.slice().sort((a, b) => a.km - b.km);
+    return insertWpts(text, pts, opts.dateLabel);
+  }
+
+  function exportFilename(original, reversed) {
+    const base = (original || 'route').replace(/\.gpx$/i, '');
+    return base + (reversed ? '_retour' : '') + '_Verpflegung.gpx';
+  }
+
+  /** Obsidian-taugliche Markdown-Tabelle */
+  function markdownTable(points) {
+    const esc = s => String(s).replace(/\|/g, '\\|').replace(/\r?\n/g, ' ');
+    const lines = ['| km | Typ | Name | Öffnungszeiten | Abstand |', '|---:|---|---|---|---:|'];
+    for (const p of points.slice().sort((a, b) => a.km - b.km)) {
+      lines.push('| ' + Math.round(p.km) + ' | ' + esc(p.label) + ' | ' + esc(p.name || p.label) + ' | '
+        + esc(p.hours) + ' | ' + Math.round(p.distM) + ' m |');
+    }
+    return lines.join('\n');
+  }
+
+  root.PSP = {
+    TYPES, TYPE_ORDER, haversine, cumulativeKm, totalAscent, buildTrack, buildTrackIndex, projectToTrack,
+    bboxOf, splitSegments, simplifyPath, buildOverpassQuery, OVERPASS_FILTERS, classifyOsm, osmName, classifyTilePoi, decodeMvtLayer, lonLatToTile,
+    tilePointToLonLat, tilesForBboxes, dedupe, hoursForDay, selectPoints, selectPointsLazy, orientSegments, longestGap, decodeFile,
+    parseGpxDoc, reverseBlocks, stripTimes, reverseGpxText, removeWpts, forceUtf8Declaration, xmlEscape,
+    wptName, wptDesc, wptXml, insertWpts, buildExport, exportFilename, markdownTable,
+  };
+})(typeof globalThis !== 'undefined' ? globalThis : this);
+</script>
+
+<!-- ======================================================================
+     APP (Oberfläche, Netzwerk, Karte)
+     ====================================================================== -->
+<script id="psp-app">
+(function () {
+  'use strict';
+  if (window.PSP_NO_APP) return; // Tests können die App-Initialisierung abschalten
+  const P = window.PSP;
+  const $ = id => document.getElementById(id);
+
+  /* ---------- Konfiguration ---------- */
+  const OVERPASS_ENDPOINTS = [
+    'https://overpass-api.de/api/interpreter',
+    'https://overpass.private.coffee/api/interpreter',
+    'https://maps.mail.ru/osm/tools/overpass/api/interpreter',
+  ];
+  const SEGMENT_KM = 10;
+  const EXTRA_MARGIN_M = 50;           // Sicherheitszuschlag zum Korridor (Linienvereinfachung ≤ 25 m)
+  const SIMPLIFY_TOL_M = 25;           // Toleranz der Linienvereinfachung für die around-Abfrage
+  const REQUEST_GAP_MS = 2500;         // Pause zwischen Anfragen (plus Zufall bis 500 ms)
+  const REQUEST_TIMEOUT_MS = 60000;
+  const RETRY_BACKOFF_S = [10, 20, 40, 60];
+  const TILEJSON_URL = 'https://tiles.openfreemap.org/planet';
+  const STORAGE_KEY = 'pitstopplanner-settings-v1';
+
+  /* ---------- Zustand ---------- */
+  const state = {
+    fileName: null, text: null, encoding: 'utf-8', origPts: null, track: null,
+    raw: [],               // klassifizierte Rohpunkte aus Overpass / Tiles (nach Dedupe)
+    seg: null,             // Abschnitts-Cache (siehe ensureSegCache)
+    searched: false,       // wurde für diese Datei schon gesucht?
+    cands: [],             // Kandidaten innerhalb der Track-Entfernung (mit km, Abstand, Zeiten)
+    base: new Set(),       // vom Algorithmus gewählte IDs
+    overrides: new Map(),  // manuelle Änderungen: id → true/false
+    applied: null,         // zuletzt angewendete Einstellungen
+    busy: false, cancel: false, controller: null,
+  };
+
+  /* ---------- Einstellungen ---------- */
+  function todayStr() {
+    const d = new Date();
+    return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+  }
+  function readSettings() {
+    const s = { types: {}, offTrack: Math.max(1, +$('offTrack').value || 300), date: $('rideDate').value || todayStr(),
+      reverse: $('reverse').checked, allPoints: $('allPoints').checked };
+    for (const t of P.TYPE_ORDER) s.types[t] = { enabled: $('en_' + t).checked, D: Math.max(0.1, +$('d_' + t).value || P.TYPES[t].defaultD) };
+    return s;
+  }
+  function writeSettings(s) {
+    $('offTrack').value = s.offTrack; $('rideDate').value = s.date;
+    $('reverse').checked = s.reverse; $('allPoints').checked = s.allPoints;
+    for (const t of P.TYPE_ORDER) { $('en_' + t).checked = s.types[t].enabled; $('d_' + t).value = s.types[t].D; }
+  }
+  function saveSettings(s) {
+    try { const c = JSON.parse(JSON.stringify(s)); delete c.date; delete c.reverse; c.removeWpts = $('removeWpts').checked;
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(c)); } catch (e) { /* Speicher nicht verfügbar */ }
+  }
+  function loadSettings() {
+    $('rideDate').value = todayStr();
+    try {
+      const c = JSON.parse(localStorage.getItem(STORAGE_KEY) || 'null');
+      if (!c) return;
+      const s = readSettings();
+      if (c.offTrack) s.offTrack = c.offTrack;
+      s.allPoints = !!c.allPoints;
+      for (const t of P.TYPE_ORDER) if (c.types && c.types[t]) s.types[t] = { enabled: !!c.types[t].enabled, D: +c.types[t].D || s.types[t].D };
+      writeSettings(s);
+      $('removeWpts').checked = !!c.removeWpts;
+    } catch (e) { /* ignorieren */ }
+  }
+  const rideDate = s => { const [y, m, d] = s.date.split('-').map(Number); return new Date(y, m - 1, d); };
+  const dateLabel = s => { const d = rideDate(s); return d.toLocaleDateString('de-DE', { weekday: 'short', day: '2-digit', month: '2-digit', year: 'numeric' }); };
+
+  /* ---------- Karte ---------- */
+  const map = L.map('map', { preferCanvas: true }).setView([51.1, 10.4], 6);
+  /*
+   * Hintergrundkarte. Die OSM-Tile-Usage-Policy (operations.osmfoundation.org/policies/tiles/) verlangt
+   * von Browsern einen gültigen Referer. Eine per file:// geöffnete Seite sendet keinen → tile.openstreetmap.org
+   * antwortet mit 403 "Access blocked". Daher:
+   *   - http(s): Standard-OSM-Kacheln mit erlaubter referrerPolicy
+   *   - file:// : OpenFreeMap (OSM-Daten, frei ohne Schlüssel/Referer, Vektor via MapLibre)
+   * Beide Varianten sind über den Ebenen-Schalter wählbar.
+   */
+  const OSM_ATTR = '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>-Mitwirkende';
+  const osmLayer = L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    maxZoom: 19, attribution: OSM_ATTR, referrerPolicy: 'strict-origin-when-cross-origin',
+  });
+  let ofmLayer = null;
+  if (L.maplibreGL) {
+    ofmLayer = L.maplibreGL({
+      style: 'https://tiles.openfreemap.org/styles/liberty',
+      attribution: '<a href="https://openfreemap.org" target="_blank">OpenFreeMap</a> &copy; <a href="https://www.openmaptiles.org/" target="_blank">OpenMapTiles</a> ' + OSM_ATTR,
+    });
+  }
+  const isWeb = /^https?:$/.test(location.protocol);
+  (isWeb || !ofmLayer ? osmLayer : ofmLayer).addTo(map);
+  if (ofmLayer) L.control.layers({ 'OpenFreeMap (OSM)': ofmLayer, 'OpenStreetMap Standard': osmLayer }, null, { position: 'topright' }).addTo(map);
+  // Falls OSM-Kacheln trotzdem blockiert werden (z. B. Referer durch Privacy-Add-on entfernt): umschalten
+  let osmErrors = 0;
+  osmLayer.on('tileerror', () => {
+    if (++osmErrors === 4 && ofmLayer && map.hasLayer(osmLayer)) { map.removeLayer(osmLayer); ofmLayer.addTo(map); }
+  });
+  const trackLayer = L.layerGroup().addTo(map);
+  const pointLayer = L.layerGroup().addTo(map);
+  // Fortschritt der Abfrage-Abschnitte: farbiges Band unter der Track-Linie (eigener Pane unter overlayPane)
+  map.createPane('segPane').style.zIndex = 350;
+  const segRenderer = L.canvas({ pane: 'segPane' });
+  const segLayer = L.layerGroup().addTo(map);
+  let segLines = [];
+  const SEG_COLORS = { running: '#3b82f6', done: '#22c55e', failed: '#ef4444', retry: '#f59e0b', tiles: '#a855f7' };
+  const markers = new Map(); // id → circleMarker
+
+  function drawTrack() {
+    trackLayer.clearLayers();
+    const ll = state.track.pts.map(p => [p.lat, p.lon]);
+    const line = L.polyline(ll, { color: '#6a1b9a', weight: 4, opacity: 0.8 }).addTo(trackLayer);
+    L.circleMarker(ll[0], { radius: 7, color: '#000', fillColor: '#4caf50', fillOpacity: 1, weight: 2 }).bindTooltip('Start').addTo(trackLayer);
+    L.circleMarker(ll[ll.length - 1], { radius: 7, color: '#000', fillColor: '#212121', fillOpacity: 1, weight: 2 }).bindTooltip('Ziel').addTo(trackLayer);
+    return line;
+  }
+
+  /* ---------- Datei laden ---------- */
+  const drop = $('drop'), fileInput = $('fileInput');
+  drop.addEventListener('click', () => fileInput.click());
+  drop.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') fileInput.click(); });
+  fileInput.addEventListener('change', () => fileInput.files[0] && loadFile(fileInput.files[0]));
+  ['dragenter', 'dragover'].forEach(ev => drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.add('over'); }));
+  ['dragleave', 'drop'].forEach(ev => drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.remove('over'); }));
+  drop.addEventListener('drop', e => { const f = e.dataTransfer.files[0]; if (f) loadFile(f); });
+  // Datei irgendwo auf die Seite fallen lassen soll nicht den Browser navigieren
+  window.addEventListener('dragover', e => e.preventDefault());
+  window.addEventListener('drop', e => { e.preventDefault(); const f = e.dataTransfer && e.dataTransfer.files[0]; if (f && /\.gpx$/i.test(f.name)) loadFile(f); });
+
+  async function loadFile(file) {
+    if (state.busy) return;
+    try {
+      const { text, encoding } = P.decodeFile(await file.arrayBuffer());
+      const doc = new DOMParser().parseFromString(text, 'application/xml');
+      const parsed = P.parseGpxDoc(doc);
+      Object.assign(state, { fileName: file.name, text, encoding, origPts: parsed.pts, origTrack: P.buildTrack(parsed.pts),
+        raw: [], cands: [], seg: null, searched: false, base: new Set(), overrides: new Map(),
+        wptCount: parsed.wptCount, kind: parsed.kind });
+      $('segChips').innerHTML = ''; $('log').textContent = '';
+      state.applied = readSettings();
+      rebuildTrack();
+      map.fitBounds(drawTrack().getBounds(), { padding: [20, 20] });
+      pointLayer.clearLayers(); markers.clear(); segLayer.clearLayers(); segLines = [];
+      $('results').classList.add('hidden');
+      $('progress').classList.add('hidden');
+      $('searchBtn').disabled = false;
+      $('downloadBtn').disabled = false;
+      $('mdBtn').disabled = true;
+      $('exportMsg').textContent = '';
+    } catch (e) {
+      $('routeInfo').innerHTML = '<span style="color:var(--err)">Fehler: ' + esc(e.message) + '</span>';
+    }
+  }
+
+  /** Track gemäß "Route umkehren" (neu) aufbauen und Infos anzeigen */
+  function rebuildTrack() {
+    const pts = state.applied.reverse ? state.origPts.slice().reverse() : state.origPts;
+    state.track = P.buildTrack(pts);
+    const t = state.track;
+    $('routeInfo').innerHTML = '<b>' + esc(state.fileName) + '</b><br>'
+      + 'Länge: <b>' + t.length.toFixed(1).replace('.', ',') + ' km</b> · Anstieg: <b>'
+      + (t.ascent == null ? '–' : 'ca. ' + Math.round(t.ascent).toLocaleString('de-DE') + ' m') + '</b><br>'
+      + t.pts.length.toLocaleString('de-DE') + ' Punkte (' + (state.kind === 'trk' ? 'Track' : 'Route') + ')'
+      + (state.wptCount ? ' · ' + state.wptCount + ' vorhandene Wegpunkte' : '')
+      + (state.applied.reverse ? ' · <b>umgekehrt</b>' : '');
+  }
+
+  /* ---------- Datenabruf: Overpass ---------- */
+  const sleep = ms => new Promise(r => setTimeout(r, ms));
+  let lastRequestAt = 0;
+  async function politePause() {
+    const wait = lastRequestAt + REQUEST_GAP_MS + Math.random() * 500 - Date.now();
+    if (wait > 0) await sleep(wait);
+    lastRequestAt = Date.now();
+  }
+  function log(msg) {
+    const el = $('log');
+    el.textContent += new Date().toLocaleTimeString('de-DE') + '  ' + msg + '\n';
+    el.scrollTop = el.scrollHeight;
+  }
+
+  /** Abfrage für Abschnitt o und die Typen types (Korridor = max. Entfernung + Zuschlag) */
+  function overpassQuery(o, types) {
+    const seg = state.seg.list[o];
+    const line = P.simplifyPath(state.origTrack.pts.slice(seg.from, seg.to + 1), SIMPLIFY_TOL_M);
+    return P.buildOverpassQuery(types, seg.bbox, line, state.seg.margin);
+  }
+
+
+  /** Eine Anfrage an einen Endpunkt; wirft Fehler mit lesbarer Meldung */
+  async function fetchOverpass(endpoint, query) {
+    await politePause();
+    const ctrl = new AbortController();
+    state.controller = ctrl;
+    const timer = setTimeout(() => ctrl.abort(), REQUEST_TIMEOUT_MS);
+    try {
+      const res = await fetch(endpoint, {
+        method: 'POST', body: 'data=' + encodeURIComponent(query), signal: ctrl.signal,
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8' },
+      });
+      if (res.status === 429) throw Object.assign(new Error('HTTP 429 (Rate-Limit)'), { rateLimit: true });
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      const txt = await res.text();
+      let json;
+      try { json = JSON.parse(txt); } catch (e) { throw new Error('keine gültige JSON-Antwort'); }
+      if (json.remark && /runtime error|timed out|out of memory/i.test(json.remark)) throw new Error('Serverfehler: ' + json.remark.slice(0, 80));
+      if (!Array.isArray(json.elements)) throw new Error('unerwartete Antwort');
+      return json.elements;
+    } catch (e) {
+      if (e.name === 'AbortError') throw new Error(state.cancel ? 'abgebrochen' : 'Timeout nach 60 s');
+      // 429 kommt oft ohne CORS-Header → im Browser nur "Failed to fetch"
+      // (Prüfung über den Namen statt instanceof – funktioniert auch über Fenstergrenzen hinweg)
+      if (e && e.name === 'TypeError') throw Object.assign(new Error('Netzwerkfehler – vermutlich Rate-Limit (429 ohne CORS)'), { rateLimit: true });
+      throw e;
+    } finally { clearTimeout(timer); state.controller = null; }
+  }
+
+  /* ---------- Abschnitte: Cache, Chips, Bänder ----------
+   * Abschnitte werden auf der ORIGINAL-Route definiert (Index "orig"), damit der Cache beim
+   * Umkehren der Route gültig bleibt. Angezeigt werden sie in aktueller Fahrtrichtung.
+   * state.seg = { margin, list:[{fromKm,toKm,from,to,bbox}], data: Map orig → Map typ → Punkte, status: [{cls,title}] }
+   * Abgefragt wird je Abschnitt nur für die Typen, die ihn gerade brauchen.
+   */
+  function ensureSegCache() {
+    const margin = state.applied.offTrack + EXTRA_MARGIN_M;
+    if (state.seg && state.seg.margin >= margin) return false;
+    const reset = !!state.seg;
+    const list = P.splitSegments(state.origTrack, SEGMENT_KM, margin);
+    state.seg = { margin, list, data: new Map(), status: list.map(() => ({ cls: '', title: 'nicht abgefragt' })) };
+    segLayer.clearLayers();
+    segLines = list.map(s => L.polyline(state.origTrack.pts.slice(s.from, s.to + 1).map(p => [p.lat, p.lon]),
+      { renderer: segRenderer, pane: 'segPane', weight: 14, opacity: 0, lineCap: 'butt' }).addTo(segLayer));
+    rebuildRaw();
+    renderChips();
+    if (reset) log('Entfernung vom Track vergrößert – Abschnitte werden mit Korridor ±' + margin + ' m neu abgefragt');
+    return true;
+  }
+  /** Abschnitte in aktueller Fahrtrichtung ({fromKm,toKm,orig}) */
+  const curSegs = () => P.orientSegments(state.seg.list, state.track.length, state.applied.reverse);
+  const isFetched = (o, type) => { const d = state.seg.data.get(o); return !!d && (type ? d.has(type) : d.size > 0); };
+  const TYPE_SHORT = { water: 'Wasser', shop: 'Einkauf', food: 'Restaurant', fuel: 'Tankstelle' };
+  /** Punkte eines Abschnitts für bestimmte Typen speichern (andere Typen verwerfen) */
+  function storeSegment(o, types, pts) {
+    if (!state.seg.data.has(o)) state.seg.data.set(o, new Map());
+    const d = state.seg.data.get(o);
+    for (const t of types) d.set(t, pts.filter(p => p.type === t));
+  }
+
+  function setStatus(o, cls, title) {
+    state.seg.status[o] = { cls, title };
+    const N = state.seg.list.length;
+    const d = state.applied.reverse ? N - 1 - o : o;        // Anzeige-Position in Fahrtrichtung
+    const c = $('segChips').children[d];
+    if (c) { c.className = 'chip ' + cls; c.title = 'Abschnitt ' + (d + 1) + ': ' + title; }
+    const line = segLines[o];
+    if (line) line.setStyle({ color: SEG_COLORS[cls] || '#888', opacity: SEG_COLORS[cls] ? 0.9 : 0,
+      dashArray: cls === 'running' ? '10 8' : null });
+  }
+  function renderChips() {
+    if (!state.seg) return;
+    const N = state.seg.list.length;
+    $('segChips').innerHTML = state.seg.list.map((s, d) => '<div class="chip">' + (d + 1) + '</div>').join('');
+    [...$('segChips').children].forEach((c, d) => c.addEventListener('click', () => {
+      const o = state.applied.reverse ? N - 1 - d : d;
+      map.fitBounds(segLines[o].getBounds(), { padding: [30, 30] });
+    }));
+    state.seg.status.forEach((st, o) => setStatus(o, st.cls, st.title));
+    updateProgress();
+  }
+  function updateProgress() {
+    if (!state.seg) return;
+    const st = state.seg.status, N = st.length;
+    const n = cls => st.filter(s => s.cls === cls).length;
+    const fetched = [...state.seg.data.values()].filter(d => d.size).length;
+    let txt = 'Abschnitte: ' + fetched + '/' + N + ' abgefragt';
+    const parts = [];
+    if (n('tiles')) parts.push(n('tiles') + ' über Vektor-Tiles');
+    if (n('failed')) parts.push(n('failed') + ' fehlgeschlagen');
+    if (!state.busy && fetched < N) parts.push((N - fetched) + ' nicht benötigt');
+    $('progressText').textContent = txt + (parts.length ? ' (' + parts.join(', ') + ')' : '');
+  }
+
+  /** Overpass-Elemente → klassifizierte Punkte */
+  function convertElements(elements) {
+    const out = [];
+    for (const el of elements) {
+      const lat = el.lat ?? (el.center && el.center.lat), lon = el.lon ?? (el.center && el.center.lon);
+      if (lat == null || lon == null) continue;
+      const cls = P.classifyOsm(el.tags || {});
+      if (!cls) continue;
+      out.push({ id: el.type + '/' + el.id, lat, lon, tags: el.tags || {}, source: 'overpass', ...cls, name: P.osmName(el.tags) });
+    }
+    return out;
+  }
+  /** Alle abgefragten Abschnitte zusammenführen (gleiche OSM-ID einmal, dann 60-m-Dedupe) */
+  function rebuildRaw() {
+    const byId = new Map();
+    for (const d of state.seg.data.values()) for (const pts of d.values()) for (const p of pts) if (!byId.has(p.id)) byId.set(p.id, p);
+    state.raw = P.dedupe([...byId.values()], 60);
+  }
+
+  const cancellableSleep = async ms => { for (let w = 0; w < ms / 100 && !state.cancel; w++) await sleep(100); };
+  let epStart = 0; // zuletzt erfolgreicher Endpunkt wird zuerst probiert
+
+  /**
+   * Einen Abschnitt abfragen: Overpass (Endpunkt-Failover, bis zu 4 Wiederholungsrunden mit Backoff).
+   * Bei 429 / "Failed to fetch" keine weiteren Overpass-Anfragen in diesem Lauf → Vektor-Tiles.
+   */
+  async function fetchSegment(o, types) {
+    const seg = state.seg.list[o];
+    const label = 'Abschnitt ' + ((state.applied.reverse ? state.seg.list.length - 1 - o : o) + 1) + ' [' + types.map(t => TYPE_SHORT[t]).join(', ') + ']';
+    const q = overpassQuery(o, types);
+    const doneTitle = extra => { const d = state.seg.data.get(o); return 'abgefragt: ' + [...d.keys()].map(t => TYPE_SHORT[t]).join(', ') + ' – ' + extra; };
+    for (let round = 0; round <= RETRY_BACKOFF_S.length && !state.cancel && !state.rateLimited; round++) {
+      if (round > 0) {
+        const wait = RETRY_BACKOFF_S[round - 1];
+        setStatus(o, 'retry', 'Wiederholung ' + round + ' in ' + wait + ' s');
+        log(label + ': Wiederholung ' + round + '/' + RETRY_BACKOFF_S.length + ' in ' + wait + ' s …');
+        await cancellableSleep(wait * 1000);
+      }
+      for (let k = 0; k < OVERPASS_ENDPOINTS.length && !state.cancel && !state.rateLimited; k++) {
+        const ei = (epStart + k) % OVERPASS_ENDPOINTS.length, ep = OVERPASS_ENDPOINTS[ei];
+        const host = new URL(ep).host;
+        setStatus(o, 'running', 'läuft (' + host + ')');
+        try {
+          const elements = await fetchOverpass(ep, q);
+          epStart = ei;
+          storeSegment(o, types, convertElements(elements));
+          setStatus(o, 'done', doneTitle(host + ', ' + elements.length + ' Objekte'));
+          log(label + ' (km ' + Math.round(curSegs().find(s => s.orig === o).fromKm) + '–' + Math.round(curSegs().find(s => s.orig === o).toKm)
+            + '): fertig via ' + host + ' (' + elements.length + ' Objekte)');
+          return;
+        } catch (e) {
+          log(label + ': ' + host + ' – ' + e.message);
+          if (e.rateLimit) {
+            state.rateLimited = true;
+            log('Rate-Limit erkannt – keine weiteren Overpass-Anfragen, Abschnitte kommen jetzt aus den Vektor-Tiles');
+          }
+        }
+      }
+    }
+    const restore = () => { const st = isFetched(o) ? ['done', doneTitle('teilweise')] : ['', 'nicht abgefragt (abgebrochen)']; setStatus(o, st[0], st[1]); };
+    if (state.cancel) { restore(); return; }
+    // Fallback: OpenFreeMap-Vektor-Tiles
+    setStatus(o, 'running', 'Vektor-Tiles werden geladen');
+    const pts = await fetchTiles([seg], label);
+    if (state.cancel) { restore(); return; }
+    storeSegment(o, types, pts || []);  // auch bei Fehlschlag als erledigt markieren, sonst Endlosschleife
+    if (pts) setStatus(o, 'tiles', doneTitle('Vektor-Tiles, ohne Öffnungszeiten'));
+    else setStatus(o, 'failed', 'fehlgeschlagen (Overpass und Vektor-Tiles)');
+  }
+
+  /**
+   * Suche. Die Abfrage folgt dem Auswahl-Algorithmus: es werden nur die Abschnitte geladen,
+   * die er tatsächlich anschaut (Sprung auf p + D, dann rückwärts). manual = Klick auf "Suchen"
+   * (frischer Abruf); sonst inkrementell nach Einstellungsänderungen (nur fehlende Abschnitte).
+   */
+  async function search(manual = true) {
+    if (!state.track || state.busy) return;
+    state.busy = true; state.cancel = false; state.rateLimited = false;
+    $('searchBtn').disabled = true; $('cancelBtn').classList.remove('hidden');
+    $('progress').classList.remove('hidden');
+    if (manual) { state.seg = null; state.overrides.clear(); $('log').textContent = ''; }
+    state.searched = true;
+    try {
+      ensureSegCache();
+      log((manual ? 'Suche' : 'Einstellungen geändert – Suche wird fortgesetzt') + ': ' + state.seg.list.length + ' Abschnitte à ~' + SEGMENT_KM
+        + ' km · Abfrage nur im Korridor ±' + state.seg.margin + ' m (max. Entfernung ' + state.applied.offTrack + ' m + ' + EXTRA_MARGIN_M + ' m)'
+        + ' und nur für benötigte Typen');
+      let fetchedNow = 0;
+      for (;;) {
+        if (state.cancel) break;
+        ensureSegCache();                       // Entfernung vom Track kann sich während der Suche ändern
+        const needs = recompute();
+        if (!needs.length) break;
+        // ein Abschnitt pro Anfrage, mit allen Typen, die genau diesen Abschnitt gerade brauchen
+        const o = needs[0].orig;
+        await fetchSegment(o, [...new Set(needs.filter(n => n.orig === o).map(n => n.type))]);
+        fetchedNow++;
+        rebuildRaw();
+        updateProgress();
+      }
+      // nicht benötigte Abschnitte kennzeichnen
+      state.seg.status.forEach((st, o) => { if (!isFetched(o) && !st.cls) setStatus(o, '', 'nicht benötigt'); });
+      const N = state.seg.list.length;
+      const used = [...state.seg.data.values()].filter(d => d.size).length;
+      log('Fertig: ' + fetchedNow + ' Anfrage(n) in diesem Lauf, ' + (N - used) + ' von ' + N + ' Abschnitten nicht benötigt · '
+        + state.cands.length + ' Kandidaten innerhalb von ' + state.applied.offTrack + ' m vom Track');
+    } catch (e) {
+      log('Fehler: ' + e.message);
+    } finally {
+      state.busy = false;
+      $('searchBtn').disabled = false; $('cancelBtn').classList.add('hidden');
+      updateProgress();
+      if (state.cancel) log('Abgebrochen – bereits geladene Abschnitte bleiben erhalten.');
+    }
+  }
+
+  /* ---------- Fallback: OpenFreeMap-Vektor-Tiles ---------- */
+  let tileTemplate = null;
+  /** Punkte aus den z14-Kacheln der Abschnitte; null, wenn gar nichts geladen werden konnte */
+  async function fetchTiles(segs, label) {
+    const out = [];
+    try {
+      if (!tileTemplate) tileTemplate = (await (await fetch(TILEJSON_URL)).json()).tiles[0];
+    } catch (e) { log('TileJSON nicht ladbar: ' + e.message); return null; }
+    const tiles = P.tilesForBboxes(segs.map(s => s.bbox), 14);
+    let n = 0;
+    for (const t of tiles) {
+      if (state.cancel) break;
+      const url = tileTemplate.replace('{z}', t.z).replace('{x}', t.x).replace('{y}', t.y);
+      try {
+        await sleep(150);
+        const res = await fetch(url);
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        const layer = P.decodeMvtLayer(new Uint8Array(await res.arrayBuffer()), 'poi');
+        for (const f of (layer ? layer.features : [])) {
+          const cls = P.classifyTilePoi(f.props);
+          if (!cls || !f.points.length) continue;
+          const pos = P.tilePointToLonLat(t.x, t.y, t.z, f.points[0][0], f.points[0][1], layer.extent);
+          out.push({ id: 'tile/' + t.x + '/' + t.y + '/' + out.length, lat: pos.lat, lon: pos.lon, tags: {},
+            source: 'tiles', ...cls, name: (f.props['name:de'] || f.props.name || '').trim() });
+        }
+        n++;
+      } catch (e) { log('Kachel ' + t.x + '/' + t.y + ': ' + e.message); }
+    }
+    log(label + ': ' + n + '/' + tiles.length + ' Vektor-Kacheln geladen, ' + out.length + ' Punkte');
+    return n ? out : null;
+  }
+
+  /* ---------- Berechnung ----------
+   * Kandidaten aus den bisher geladenen Daten, Auswahl je Typ (selectPointsLazy).
+   * Rückgabe: noch benötigte Abfragen [{orig, type}]; leer = vollständig.
+   */
+  function recompute() {
+    const s = state.applied;
+    if (!state.track || !state.seg) return [];
+    const OH = window.opening_hours || null;
+    const day = rideDate(s);
+    state.cands = [];
+    for (const r of state.raw) {
+      if (!s.types[r.type].enabled) continue;
+      const proj = P.projectToTrack(state.track, r.lat, r.lon, s.offTrack);
+      if (!proj) continue;
+      let h;
+      if (r.type === 'water') h = { text: '–', state: 'open' };
+      else if (r.source !== 'overpass') h = { text: '?', state: 'unknown' };
+      else h = P.hoursForDay(OH, r.tags.opening_hours, r.lat, r.lon, day, r.tags['addr:country']);
+      state.cands.push({ ...r, km: proj.km, distM: proj.distM, hours: h.text, openState: h.state, hasName: !!r.name });
+    }
+    state.cands.sort((a, b) => a.km - b.km);
+    state.base = new Set();
+    const segs = curSegs(), needs = [];
+    for (const t of P.TYPE_ORDER) {
+      if (!s.types[t].enabled) continue;
+      const fetchedCur = k => isFetched(segs[k].orig, t);
+      const c = state.cands.filter(x => x.type === t);
+      if (s.allPoints) {                         // alle Punkte → ganze Route nötig
+        c.forEach(x => state.base.add(x.id));
+        const k = segs.findIndex((sg, i) => !fetchedCur(i));
+        if (k >= 0) needs.push({ orig: segs[k].orig, type: t });
+        continue;
+      }
+      const res = P.selectPointsLazy(c, s.types[t].D, state.track.length, segs, fetchedCur);
+      res.sel.forEach(x => state.base.add(x.id));
+      if (res.need >= 0) needs.push({ orig: segs[res.need].orig, type: t });
+    }
+    render();
+    return needs;
+  }
+
+  const isSelected = c => (state.overrides.has(c.id) ? state.overrides.get(c.id) : state.base.has(c.id));
+  const selectedPoints = () => state.cands.filter(isSelected);
+
+  /* ---------- Darstellung ---------- */
+  function esc(s) { return P.xmlEscape(s == null ? '' : s); }
+  function popupHtml(c) {
+    const osm = c.source === 'overpass' ? ' · <a href="https://www.openstreetmap.org/' + c.id + '" target="_blank" rel="noopener">OSM</a>' : '';
+    return '<b>' + esc(c.name || c.label) + '</b><br>' + esc(c.label) + ' (' + P.TYPES[c.type].name + ')<br>'
+      + 'km ' + c.km.toFixed(1).replace('.', ',') + ' · ' + Math.round(c.distM) + ' m vom Track<br>'
+      + 'Öffnungszeiten: ' + esc(c.hours) + '<br>Quelle: ' + (c.source === 'overpass' ? 'Overpass' : 'Vektor-Tiles') + osm
+      + '<div class="pop-state">' + (isSelected(c) ? '✓ im GPX-Export' : 'nicht im Export') + '</div>'
+      + '<button class="pop-toggle' + (isSelected(c) ? ' secondary' : '') + '" data-id="' + esc(c.id) + '">'
+      + (isSelected(c) ? 'Aus Export entfernen' : 'Für Export übernehmen') + '</button>';
+  }
+  function styleFor(c) {
+    return isSelected(c)
+      ? { radius: 8, color: '#fff', weight: 2, fillColor: P.TYPES[c.type].color, fillOpacity: 1 }
+      : { radius: 4, color: '#616161', weight: 1, fillColor: '#9e9e9e', fillOpacity: 0.8 };
+  }
+
+  function render() {
+    pointLayer.clearLayers(); markers.clear();
+    // erst graue, dann farbige Marker (farbige liegen oben)
+    const ordered = state.cands.slice().sort((a, b) => isSelected(a) - isSelected(b));
+    for (const c of ordered) {
+      const m = L.circleMarker([c.lat, c.lon], styleFor(c)).bindPopup(() => popupHtml(c)).addTo(pointLayer);
+      // Klick auf einen grauen Kandidaten übernimmt ihn direkt in den Export (ausgewählte: nur Popup)
+      m.on('click', () => { if (!isSelected(c)) setSelected(c, true); });
+      markers.set(c.id, m);
+    }
+    renderTable();
+    renderWarnings();
+    $('results').classList.remove('hidden');
+    $('mdBtn').disabled = false;
+  }
+
+  function renderTable() {
+    const only = $('onlySelected').checked;
+    const rows = [];
+    for (const c of state.cands) {
+      const sel = isSelected(c);
+      if (only && !sel) continue;
+      rows.push('<tr data-id="' + esc(c.id) + '" class="' + (sel ? 'sel' : '') + (state.overrides.has(c.id) ? ' manual' : '') + '">'
+        + '<td class="num">' + c.km.toFixed(1).replace('.', ',') + '</td>'
+        + '<td><span class="dot" style="background:' + P.TYPES[c.type].color + '"></span>' + esc(c.label) + '</td>'
+        + '<td class="name">' + (c.name ? esc(c.name) : '<span class="muted">' + esc(c.label) + '</span>') + '</td>'
+        + '<td>' + esc(c.hours) + '</td>'
+        + '<td class="num">' + Math.round(c.distM) + '</td>'
+        + '<td>' + (c.source === 'overpass' ? 'Overpass' : 'Vektor-Tiles') + '</td>'
+        + '<td><input type="checkbox" ' + (sel ? 'checked' : '') + ' aria-label="übernehmen"></td></tr>');
+    }
+    $('tbody').innerHTML = rows.join('') || '<tr><td colspan="7" class="muted">Keine Punkte gefunden.</td></tr>';
+    const n = selectedPoints().length;
+    $('countInfo').textContent = state.cands.length + ' Kandidaten, ' + n + ' ausgewählt'
+      + (state.overrides.size ? ' (' + state.overrides.size + ' manuell geändert)' : '');
+  }
+
+  function renderWarnings() {
+    const s = state.applied, out = [];
+    if (!window.opening_hours) out.push('<div class="msg err">opening_hours.js konnte nicht geladen werden – Öffnungszeiten werden als „?“ angezeigt.</div>');
+    const sel = selectedPoints();
+    for (const t of P.TYPE_ORDER) {
+      if (!s.types[t].enabled) continue;
+      const D = s.types[t].D;
+      const g = P.longestGap(sel.filter(c => c.type === t).map(c => c.km), state.track.length);
+      if (g.gap > D * 1.2) {
+        out.push('<div class="msg"><b>' + P.TYPES[t].name + ':</b> längste Lücke ' + g.gap.toFixed(1).replace('.', ',')
+          + ' km (km ' + Math.round(g.fromKm) + '–' + Math.round(g.toKm) + ') – mehr als 20 % über dem max. Abstand von ' + D + ' km.</div>');
+      }
+    }
+    $('warnings').innerHTML = out.join('');
+  }
+
+  /**
+   * Punkt manuell in den Export aufnehmen / daraus entfernen (Tabelle, Kartenklick, Popup-Button).
+   * Aktualisiert Marker, Popup, Tabellenzeile, Lückenwarnungen und Zähler.
+   */
+  function setSelected(c, want) {
+    if (want === state.base.has(c.id)) state.overrides.delete(c.id); else state.overrides.set(c.id, want);
+    const m = markers.get(c.id);
+    if (m) {
+      m.setStyle(styleFor(c)); m.setRadius(styleFor(c).radius);
+      if (want) m.bringToFront();
+      if (m.isPopupOpen()) m.setPopupContent(popupHtml(c));
+    }
+    const tr = $('tbody').querySelector('tr[data-id="' + CSS.escape(c.id) + '"]');
+    if (tr && !(!want && $('onlySelected').checked)) {
+      tr.classList.toggle('sel', want);
+      tr.classList.toggle('manual', state.overrides.has(c.id));
+      tr.querySelector('input[type=checkbox]').checked = want;
+      const n = selectedPoints().length;
+      $('countInfo').textContent = state.cands.length + ' Kandidaten, ' + n + ' ausgewählt'
+        + (state.overrides.size ? ' (' + state.overrides.size + ' manuell geändert)' : '');
+    } else {
+      renderTable(); // Zeile fehlt (Filter „nur ausgewählte“) → Tabelle neu aufbauen
+    }
+    renderWarnings();
+  }
+  // Popup-Button „Für Export übernehmen“ / „Aus Export entfernen“
+  $('map').addEventListener('click', e => {
+    const b = e.target.closest('.pop-toggle');
+    if (!b) return;
+    const c = state.cands.find(x => x.id === b.dataset.id);
+    if (c) setSelected(c, !isSelected(c));
+  });
+
+  // Tabelle: Checkbox (manuelle Änderung) und Klick auf Zeile (Popup öffnen)
+  $('tbody').addEventListener('click', e => {
+    const tr = e.target.closest('tr[data-id]');
+    if (!tr) return;
+    const c = state.cands.find(x => x.id === tr.dataset.id);
+    if (!c) return;
+    if (e.target.matches('input[type=checkbox]')) { setSelected(c, e.target.checked); return; }
+    const m = markers.get(c.id);
+    if (m) { map.setView(m.getLatLng(), Math.max(map.getZoom(), 14)); m.openPopup(); }
+  });
+  $('onlySelected').addEventListener('change', renderTable);
+
+  /* ---------- Einstellungen geändert ---------- */
+  function onSettingsChanged() {
+    const s = readSettings();
+    if (state.track && state.overrides.size) {
+      if (!confirm('Du hast Punkte manuell geändert. Änderungen verwerfen und mit den neuen Einstellungen neu berechnen?')) {
+        writeSettings(state.applied); // Abbruch: alte Einstellungen wiederherstellen
+        return;
+      }
+      state.overrides.clear();
+    }
+    const reverseChanged = state.applied && s.reverse !== state.applied.reverse;
+    state.applied = s;
+    saveSettings(s);
+    if (!state.track) return;
+    if (reverseChanged) { rebuildTrack(); drawTrack(); renderChips(); }
+    if (!state.searched) return;
+    if (state.busy) return;                     // laufende Suche übernimmt die neuen Einstellungen selbst
+    const marginTooSmall = state.seg && s.offTrack + EXTRA_MARGIN_M > state.seg.margin;
+    const needs = recompute();
+    if (needs.length || marginTooSmall) search(false);   // nur fehlende Abschnitte nachladen
+  }
+  document.querySelectorAll('#settingsPanel input').forEach(el => el.addEventListener('change', onSettingsChanged));
+  $('removeWpts').addEventListener('change', () => saveSettings(readSettings()));
+
+  $('searchBtn').addEventListener('click', () => search(true));
+  $('cancelBtn').addEventListener('click', () => { state.cancel = true; if (state.controller) state.controller.abort(); });
+
+  /* ---------- Export ---------- */
+  function currentExportPoints() {
+    return selectedPoints().map(c => ({ lat: c.lat, lon: c.lon, km: c.km, distM: c.distM, name: c.name,
+      label: c.label, type: c.type, hours: c.hours, source: c.source }));
+  }
+  /** GPX-Exporttext aus aktuellem Zustand */
+  function exportText() {
+    const s = state.applied;
+    return P.buildExport({ text: state.text, reversed: s.reverse, removeExisting: $('removeWpts').checked,
+      points: currentExportPoints(), dateLabel: dateLabel(s) });
+  }
+  $('downloadBtn').addEventListener('click', () => {
+    if (!state.text) return;
+    const s = state.applied;
+    try {
+      const out = exportText();
+      const blob = new Blob([out], { type: 'application/gpx+xml;charset=utf-8' });
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = P.exportFilename(state.fileName, s.reverse);
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+      $('exportMsg').textContent = a.download + ' mit ' + currentExportPoints().length + ' Wegpunkten erstellt.';
+    } catch (e) { $('exportMsg').textContent = 'Export fehlgeschlagen: ' + e.message; }
+  });
+  $('mdBtn').addEventListener('click', async () => {
+    const md = P.markdownTable(currentExportPoints());
+    try { await navigator.clipboard.writeText(md); }
+    catch (e) { // Fallback für Browser ohne Clipboard-API auf file://
+      const ta = document.createElement('textarea'); ta.value = md; document.body.appendChild(ta);
+      ta.select(); document.execCommand('copy'); ta.remove();
+    }
+    $('exportMsg').textContent = 'Markdown-Tabelle (' + currentExportPoints().length + ' Zeilen) in die Zwischenablage kopiert.';
+  });
+
+  loadSettings();
+  state.applied = readSettings();
+
+  // Für automatisierte Tests zugänglich
+  window.PSP_APP = { state, loadFile, search, recompute, readSettings, onSettingsChanged, currentExportPoints, exportText, markers, OVERPASS_ENDPOINTS };
+})();
+</script>
+</body>
+</html>

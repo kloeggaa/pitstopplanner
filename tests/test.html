@@ -1,0 +1,281 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<title>PitStopPlanner – Browser-Tests</title>
+<!--
+  Browser-Tests (DOMParser-Prüfungen + End-to-End mit gemocktem Overpass).
+  Headless:  chromium --headless --allow-file-access-from-files --virtual-time-budget=180000 \
+               --dump-dom "file:///…/tests/test.html?gpx=../meine-route.gpx"
+  Manuell:   Datei öffnen; falls der Browser file://-fetch blockiert (Firefox, Chrome ohne Flag),
+             unten index.html (und optional eine GPX) auswählen.
+-->
+<style>
+  body { font: 14px/1.4 system-ui, sans-serif; margin: 16px; background: #fff; color: #111; }
+  pre { white-space: pre-wrap; }
+  .ok { color: #2e7d32; } .fail { color: #c62828; }
+  iframe { width: 1100px; height: 700px; border: 1px solid #ccc; margin-top: 12px; }
+</style>
+<script src="fixtures.js"></script>
+</head>
+<body>
+<h1>PitStopPlanner – Browser-Tests</h1>
+<div id="pick" hidden>
+  <p>file://-Zugriff blockiert. Bitte Dateien wählen:</p>
+  <label>index.html <input type="file" id="appFile" accept=".html"></label><br>
+  <label>optionale GPX <input type="file" id="gpxFile" accept=".gpx"></label>
+  <button id="go">Tests starten</button>
+</div>
+<pre id="out"></pre>
+<script>
+'use strict';
+const out = document.getElementById('out');
+const results = [];
+function check(name, cond, detail) {
+  results.push([!!cond, name]);
+  const line = document.createElement('div');
+  line.className = cond ? 'ok' : 'fail';
+  line.textContent = (cond ? 'PASS ' : 'FAIL ') + name + (cond || !detail ? '' : ' → ' + detail);
+  out.appendChild(line);
+}
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+const params = new URLSearchParams(location.search);
+
+function loadCore(html) {
+  const core = /<script id="psp-core">\n([\s\S]*?)<\/script>/.exec(html)[1];
+  (0, eval)(core);
+  return window.PSP;
+}
+
+/** Track-/Routenpunkte aus einem DOM als "lat,lon,ele"-Strings */
+function domPoints(doc) {
+  let nodes = [...doc.getElementsByTagNameNS('*', 'trkpt')];
+  if (!nodes.length) nodes = [...doc.getElementsByTagNameNS('*', 'rtept')];
+  return nodes.map(n => n.getAttribute('lat') + ',' + n.getAttribute('lon') + ',' +
+    ((n.getElementsByTagNameNS('*', 'ele')[0] || {}).textContent || ''));
+}
+
+/** Gemeinsame Export-Prüfungen für eine GPX-Quelle */
+function exportChecks(P, label, text, sampleWpts) {
+  const dp = new DOMParser();
+  const src = dp.parseFromString(text, 'application/xml');
+  const srcPts = domPoints(src);
+  const trkTag = /<(?:rte|trk)(?=[\s>])/;
+
+  // --- vorwärts ---
+  const fwd = P.buildExport({ text, reversed: false, removeExisting: false, points: sampleWpts(false), dateLabel: 'Mo., 23.11.2026' });
+  const doc = dp.parseFromString(fwd, 'application/xml');
+  check(label + ': Export parst mit DOMParser (vorwärts)', !doc.getElementsByTagName('parsererror').length);
+  const kids = [...doc.documentElement.children].map(e => e.localName);
+  const firstTrk = kids.findIndex(k => k === 'trk' || k === 'rte');
+  const lastWpt = kids.lastIndexOf('wpt');
+  check(label + ': alle <wpt> vor dem ersten <trk>/<rte>', lastWpt >= 0 && lastWpt < firstTrk, kids.join(','));
+  check(label + ': Wegpunkte im DOM = erwartete Anzahl',
+    doc.getElementsByTagNameNS('*', 'wpt').length === src.getElementsByTagNameNS('*', 'wpt').length + sampleWpts(false).length);
+  const iSrc = text.search(trkTag), iOut = fwd.search(trkTag);
+  check(label + ': Trackteil byte-identisch zur Eingabe', fwd.slice(iOut) === text.slice(iSrc));
+  check(label + ': Trackpunkte (DOM) identisch', JSON.stringify(domPoints(doc)) === JSON.stringify(srcPts));
+  check(label + ': Umlaute/Escaping im DOM korrekt',
+    [...doc.getElementsByTagNameNS('*', 'name')].some(n => n.textContent === 'Gasthof "Ä&Ö" <Test> (Restaurant), 10km, 11:00-14:00,17:00-22:00'));
+
+  // --- rückwärts ---
+  const rev = P.buildExport({ text, reversed: true, removeExisting: false, points: sampleWpts(true), dateLabel: 'x' });
+  const rdoc = dp.parseFromString(rev, 'application/xml');
+  check(label + ': Export parst mit DOMParser (umgekehrt)', !rdoc.getElementsByTagName('parsererror').length);
+  check(label + ': Trackpunkte umgekehrt', JSON.stringify(domPoints(rdoc)) === JSON.stringify(srcPts.slice().reverse()));
+  check(label + ': keine <time>-Elemente', rdoc.getElementsByTagNameNS('*', 'time').length === 0);
+  const rk = [...rdoc.documentElement.children].map(e => e.localName);
+  check(label + ': umgekehrt – <wpt> vor <trk>', rk.lastIndexOf('wpt') < rk.findIndex(k => k === 'trk' || k === 'rte'));
+  return { fwd, rev, srcPts };
+}
+
+/** Beispiel-Wegpunkte (enthält Sonderzeichen) relativ zur Route */
+function sampleFor(P, pts) {
+  const tr = P.buildTrack(pts), L = tr.length;
+  const mk = (frac, name, label, type, hours) => {
+    const i = Math.floor(frac * (pts.length - 1));
+    return { lat: pts[i].lat, lon: pts[i].lon, km: tr.cum[i], distM: 42, name, label, type, hours, source: 'overpass' };
+  };
+  return reversed => {
+    const w = [mk(0.5, 'Gasthof "Ä&Ö" <Test>', 'Restaurant', 'food', '11:00-14:00,17:00-22:00'),
+               mk(0.25, '', 'Trinkwasser', 'water', '–')];
+    w[0].km = 10; // feste km für exakten Namensvergleich
+    if (reversed) w.forEach(p => { p.km = L - p.km; });
+    return w;
+  };
+}
+
+/* ---------- End-to-End: echte App im iframe, Overpass gemockt ---------- */
+async function e2e(F) {
+  const frame = document.createElement('iframe');
+  frame.src = '../index.html';
+  document.body.appendChild(frame);
+  await new Promise(r => frame.onload = r);
+  const w = frame.contentWindow;
+  let ok = !!(w && w.PSP_APP);
+  check('E2E: App im iframe geladen (Leaflet + App-Skript)', ok);
+  if (!ok) return;
+  check('E2E: opening_hours.js vom CDN geladen', typeof w.opening_hours === 'function');
+
+  // fetch-Mock: erster Overpass-Aufruf scheitert mit HTTP 504 (→ nächster Endpunkt);
+  // im Modus 'ratelimit' wirft der 2. Aufruf "Failed to fetch" (429 ohne CORS), Tiles werden ebenfalls gemockt
+  const calls = [];
+  let mode = 'normal';
+  const realFetch = w.fetch.bind(w);
+  w.fetch = async (url, opts) => {
+    url = String(url);
+    calls.push(url);
+    if (url.includes('interpreter')) {
+      const n = calls.filter(u => u.includes('interpreter')).length;
+      if (mode === 'normal' && n === 1) return new Response('Gateway Timeout', { status: 504 });
+      if (mode === 'ratelimit' && n === 2) throw new TypeError('Failed to fetch');
+      return new Response(JSON.stringify({ elements: F.mockOverpassElements() }), { status: 200 });
+    }
+    if (mode === 'ratelimit' && url.includes('openfreemap')) {
+      if (url.endsWith('/planet')) return new Response(JSON.stringify({ tiles: ['https://tiles.openfreemap.org/mock/{z}/{x}/{y}.pbf'] }));
+      return new Response(new Uint8Array(0)); // leere Kachel
+    }
+    return realFetch(url, opts);
+  };
+  const doc = w.document;
+  // wartet, bis eine (ggf. automatisch gestartete) Nachlade-Suche fertig ist
+  const waitIdle = async () => { await sleep(20); for (let i = 0; i < 6000 && w.PSP_APP.state.busy; i++) await sleep(100); };
+  doc.getElementById('rideDate').value = '2026-11-23';
+  doc.getElementById('d_shop').value = 6; doc.getElementById('d_food').value = 8; doc.getElementById('d_fuel').value = 8;
+  w.PSP_APP.onSettingsChanged();
+  await w.PSP_APP.loadFile(new File([F.makeTestGpx()], 'test-route.gpx'));
+  check('E2E: Route geladen, Länge angezeigt', /20,0 km/.test(doc.getElementById('routeInfo').textContent), doc.getElementById('routeInfo').textContent);
+  await w.PSP_APP.search();
+  const st = w.PSP_APP.state;
+  const ip = calls.filter(u => u.includes('interpreter'));
+  check('E2E: Failover nach HTTP 504 auf nächsten Endpunkt', ip[0].includes('overpass-api.de') && ip[1].includes('private.coffee'), ip.join(' | '));
+  check('E2E: alle Abschnitte fertig', [...doc.querySelectorAll('#segChips .chip')].every(c => c.classList.contains('done')));
+  check('E2E: Kandidaten = 9', st.cands.length === 9, st.cands.length);
+  const sel = w.PSP_APP.currentExportPoints().map(p => p.type + '@' + Math.round(p.km)).sort().join(',');
+  check('E2E: Auswahl wie erwartet', sel === 'food@10,food@15,fuel@11,shop@17,shop@4,shop@9,water@15', sel);
+  check('E2E: Tabelle hat 9 Zeilen', doc.querySelectorAll('#tbody tr[data-id]').length === 9);
+  let txt = w.PSP_APP.exportText();
+  check('E2E: Export enthält „Aral (Tankstelle), 11km, 8:00-22:00“', txt.includes('<name>Aral (Tankstelle), 11km, 8:00-22:00</name>'));
+  check('E2E: Café am Montag „zu“', st.cands.some(c => c.name === 'Café Sonne' && c.hours === 'zu'));
+
+  // manuelle Änderung: grauen Kandidaten (Trinkwasser km 3) ankreuzen
+  const water3 = st.cands.find(c => c.type === 'water' && Math.round(c.km) === 3);
+  const cb = doc.querySelector('#tbody tr[data-id="' + water3.id + '"] input');
+  cb.click();
+  check('E2E: manuelle Auswahl übernommen', w.PSP_APP.currentExportPoints().some(p => p.lat === water3.lat));
+  // Kartenklick auf grauen Kandidaten → in den Export; Popup-Button → wieder entfernen
+  const grey = st.cands.find(c => !w.PSP_APP.currentExportPoints().some(p => p.lat === c.lat && p.lon === c.lon));
+  const gm = w.PSP_APP.markers.get(grey.id);
+  gm.fire('click', { latlng: gm.getLatLng() });
+  const inExport = () => w.PSP_APP.currentExportPoints().some(p => p.lat === grey.lat && p.lon === grey.lon);
+  check('E2E: Kartenklick übernimmt grauen Punkt in den Export', inExport());
+  check('E2E: Tabellenzeile nach Kartenklick angehakt',
+    doc.querySelector('#tbody tr[data-id="' + grey.id + '"] input').checked);
+  const btn = doc.querySelector('.leaflet-popup .pop-toggle');
+  check('E2E: Popup zeigt „Aus Export entfernen“', btn && btn.textContent === 'Aus Export entfernen', btn && btn.textContent);
+  btn.click();
+  check('E2E: Popup-Button entfernt Punkt wieder', !inExport()
+    && doc.querySelector('.leaflet-popup .pop-toggle').textContent === 'Für Export übernehmen');
+  gm.closePopup();
+
+  // Einstellungsänderung mit Abbruch → Einstellungen zurück, manuelle Auswahl bleibt
+  w.confirm = () => false;
+  doc.getElementById('d_water').value = 5;
+  w.PSP_APP.onSettingsChanged();
+  check('E2E: Abbruch bei Rückfrage behält Einstellungen + Auswahl',
+    doc.getElementById('d_water').value === '15' && w.PSP_APP.currentExportPoints().some(p => p.lat === water3.lat));
+  // Umkehren mit Bestätigung
+  w.confirm = () => true;
+  doc.getElementById('reverse').checked = true;
+  w.PSP_APP.onSettingsChanged();
+  await waitIdle();
+  txt = w.PSP_APP.exportText();
+  check('E2E: umgekehrt – Aral bei km 9, keine <time>', txt.includes('Aral (Tankstelle), 9km, ') && !txt.includes('<time'));
+  check('E2E: umgekehrt – manuelle Änderungen verworfen', st.overrides.size === 0);
+  const g = doc.getElementById('warnings').textContent;
+  check('E2E: Lückenwarnung wird angezeigt (Tankstelle)', /Tankstelle:.*längste Lücke/.test(g), g);
+
+  // Rate-Limit: nach "Failed to fetch" keine weiteren Overpass-Anfragen, Rest über Vektor-Tiles
+  calls.length = 0; mode = 'ratelimit';
+  await w.PSP_APP.search();
+  const ip2 = calls.filter(u => u.includes('interpreter'));
+  const chips = [...doc.querySelectorAll('#segChips .chip')].map(c => c.className.replace('chip ', ''));
+  check('E2E: nach Rate-Limit keine weiteren Overpass-Anfragen', ip2.length === 2, ip2.length + ' Anfragen');
+  check('E2E: Daten aus Overpass (vor dem Limit) und Vektor-Tiles (danach)',
+    w.PSP_APP.state.raw.some(r => r.source === 'overpass') && chips.includes('tiles'), chips.join(','));
+  check('E2E: Kachel-Fallback wurde abgefragt', calls.some(u => u.includes('/mock/14/')));
+  check('E2E: Log meldet Rate-Limit', /Rate-Limit erkannt/.test(doc.getElementById('log').textContent));
+
+  // Abfrage folgt dem Algorithmus: nur Wasser, D = 50 km > Route (20 km) → gar keine Anfrage nötig
+  mode = 'normal-ok'; calls.length = 0;
+  for (const t of ['shop', 'food', 'fuel']) doc.getElementById('en_' + t).checked = false;
+  doc.getElementById('d_water').value = 50;
+  w.PSP_APP.onSettingsChanged();
+  await waitIdle();
+  await w.PSP_APP.search(true);
+  check('E2E: D > Route → keine Overpass-Anfrage', calls.filter(u => u.includes('interpreter')).length === 0, calls.length);
+  check('E2E: Fortschritt zeigt „nicht benötigt“', /2 nicht benötigt/.test(doc.getElementById('progressText').textContent), doc.getElementById('progressText').textContent);
+  // Einstellung ändern → fehlende Abschnitte werden automatisch nachgeladen (inkrementell)
+  doc.getElementById('d_water').value = 8;
+  w.PSP_APP.onSettingsChanged();
+  for (let i = 0; i < 600 && !w.PSP_APP.state.busy; i++) await sleep(10);
+  for (let i = 0; i < 6000 && w.PSP_APP.state.busy; i++) await sleep(100);
+  const n2 = calls.filter(u => u.includes('interpreter')).length;
+  check('E2E: Einstellungsänderung lädt fehlende Abschnitte nach', n2 >= 1 && w.PSP_APP.state.seg.data.size >= 1, n2 + ' Anfragen');
+  doc.getElementById('d_water').value = 9;
+  w.PSP_APP.onSettingsChanged();
+  await sleep(50);
+  check('E2E: bereits geladene Abschnitte werden nicht erneut abgefragt', calls.filter(u => u.includes('interpreter')).length === n2 && !w.PSP_APP.state.busy);
+}
+
+async function run(appHtml, gpxText, gpxName) {
+  const P = loadCore(appHtml);
+  const F = window.PSP_FIXTURES;
+  const testGpx = F.makeTestGpx();
+  const tp = F.testPoints();
+  exportChecks(P, 'Test-GPX', testGpx, sampleFor(P, tp));
+  // Namensformat
+  check('Namensformat: Aral', P.wptName('Aral', 'Tankstelle', 52, '8:00-22:00') === 'Aral (Tankstelle), 52km, 8:00-22:00');
+  check('Namensformat: Netto', P.wptName('Netto', 'Supermarkt', 76.2, '?') === 'Netto (Supermarkt), 76km, ?');
+  check('Namensformat: Trinkbrunnen', P.wptName('Trinkbrunnen', 'Trinkwasser', 89, '–') === 'Trinkbrunnen (Trinkwasser), 89km, –');
+  check('Namensformat: ohne Name', P.wptName('', 'Bäckerei', 4, '?') === 'Bäckerei (Bäckerei), 4km, ?');
+
+  if (gpxText) {
+    const doc = new DOMParser().parseFromString(gpxText, 'application/xml');
+    const parsed = P.parseGpxDoc(doc);
+    const tr = P.buildTrack(parsed.pts);
+    out.appendChild(document.createTextNode(gpxName + ': ' + parsed.pts.length + ' Punkte, ' + tr.length.toFixed(1) + ' km, Anstieg ' + Math.round(tr.ascent) + ' m\n'));
+    exportChecks(P, gpxName, gpxText, sampleFor(P, parsed.pts));
+  }
+  if (!params.has('noe2e')) {
+    try { await e2e(F); } catch (e) { check('E2E: ohne Ausnahme durchgelaufen', false, e.message); }
+  }
+  const fail = results.filter(r => !r[0]).length;
+  const summary = document.createElement('h2');
+  summary.id = 'summary';
+  summary.textContent = (results.length - fail) + '/' + results.length + ' Browser-Tests bestanden';
+  summary.className = fail ? 'fail' : 'ok';
+  document.body.insertBefore(summary, out);
+  document.title = 'DONE ' + summary.textContent;
+}
+
+(async () => {
+  try {
+    const appHtml = await (await fetch('../index.html')).text();
+    let gpxText = null, gpxName = null;
+    if (params.get('gpx')) { gpxName = params.get('gpx').split('/').pop(); gpxText = await (await fetch(params.get('gpx'))).text(); }
+    await run(appHtml, gpxText, gpxName);
+  } catch (e) {
+    // file://-fetch blockiert → manuelle Auswahl
+    document.getElementById('pick').hidden = false;
+    document.getElementById('go').onclick = async () => {
+      const a = document.getElementById('appFile').files[0], g = document.getElementById('gpxFile').files[0];
+      if (!a) return;
+      params.set('noe2e', '1'); // iframe-Zugriff ist ohne Flag ebenfalls blockiert
+      await run(await a.text(), g ? await g.text() : null, g ? g.name : null);
+    };
+  }
+})();
+</script>
+</body>
+</html>
