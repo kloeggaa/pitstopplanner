@@ -190,6 +190,38 @@ test('Abfrage: nur gewünschte Typen, around-Korridor, out center tags', () => {
   }
 });
 
+test('MVT-Decoder: beschädigte Kacheln werfen Fehler statt zu hängen', () => {
+  const t0 = Date.now();
+  const bad = [
+    new Uint8Array([0x1a, 0xff, 0xff, 0xff, 0xff, 0x0f]),          // Layer mit riesiger Länge
+    new Uint8Array([0x1a, 0x05, 0x0a, 0x03, 0x70, 0x6f]),          // abgeschnitten
+    new Uint8Array([0x1a, 0x08, 0x0a, 0x03, 0x70, 0x6f, 0x69, 0x12, 0x01, 0xff]), // poi-Feature mit unvollständigem Varint
+    new Uint8Array(Array(20).fill(0xff)),                          // endloses Varint
+  ];
+  for (const b of bad) assert.throws(() => P.decodeMvtLayer(b, 'poi'), /beschädigt|Wire/);
+  assert.ok(Date.now() - t0 < 500, 'zu langsam');
+  assert.equal(P.decodeMvtLayer(new Uint8Array(0), 'poi'), null); // leere Kachel ist ok
+});
+test('GPX-Textprüfung: Präfixe und Kommentare werden erkannt', () => {
+  const ok = { kind: 'trk', rawCount: 201 };
+  assert.equal(P.checkGpxText(F.makeTestGpx(), ok), null);
+  const pre = '<gpx:gpx xmlns:gpx="http://www.topografix.com/GPX/1/1"><gpx:trk><gpx:trkseg><gpx:trkpt lat="1" lon="1"/></gpx:trkseg></gpx:trk></gpx:gpx>';
+  assert.match(P.checkGpxText(pre, { kind: 'trk', rawCount: 1 }), /Präfix/);
+  const com = F.makeTestGpx().replace('<trk>', '<!-- <trkpt lat="0" lon="0"/> -->\n  <trk>');
+  assert.match(P.checkGpxText(com, ok), /Ungewöhnlicher GPX-Aufbau/);
+  // Garmin-Erweiterungen mit Präfix sind erlaubt
+  const ext = F.makeTestGpx().replace('<ele>500.0</ele>', '<ele>500.0</ele><extensions><gpxtpx:TrackPointExtension><gpxtpx:hr>120</gpxtpx:hr></gpxtpx:TrackPointExtension></extensions>');
+  assert.equal(P.checkGpxText(ext, ok), null);
+});
+test('Dedupe: zwei verschiedene Läden nebeneinander bleiben, Doppelerfassung wird entfernt', () => {
+  const aldi = { id: 'n1', type: 'shop', name: 'Aldi', ...F.posAt(5, 0), source: 'overpass' };
+  const lidl = { id: 'n2', type: 'shop', name: 'Lidl', ...F.posAt(5.03, 0), source: 'overpass' };
+  const aldiWay = { id: 'w1', type: 'shop', name: 'ALDI', ...F.posAt(5.02, 10), source: 'overpass' };
+  const tile = { id: 't1', type: 'shop', name: 'Lidl Filiale', ...F.posAt(5.031, 0), source: 'tiles' };
+  const r = arr(P.dedupe([aldi, lidl, aldiWay, tile], 60).map(x => x.id).sort());
+  assert.deepEqual(r, ['n1', 'n2']);
+});
+
 test('Lücken: longestGap inkl. Start und Ziel', () => {
   const g = P.longestGap([4.5, 6, 19], 20);
   assert.ok(Math.abs(g.gap - 13) < 1e-9 && g.fromKm === 6 && g.toKm === 19);

@@ -127,11 +127,15 @@ async function e2e(F) {
     calls.push(url);
     if (url.includes('interpreter')) {
       const n = calls.filter(u => u.includes('interpreter')).length;
+      if (mode === 'down' || mode === 'alldown') return new Response('Gateway Timeout', { status: 504 });
+      if (mode === 'xss') return new Response(JSON.stringify({ elements: [{ type: 'node" onmouseover="window.__xss=1', id: 1,
+        lat: F.posAt(5, 20).lat, lon: F.posAt(5, 20).lon, tags: { amenity: 'drinking_water', name: '<img src=x onerror="window.__xss=1">' } }] }));
       if (mode === 'normal' && n === 1) return new Response('Gateway Timeout', { status: 504 });
       if (mode === 'ratelimit' && n === 2) throw new TypeError('Failed to fetch');
       return new Response(JSON.stringify({ elements: F.mockOverpassElements() }), { status: 200 });
     }
-    if (mode === 'ratelimit' && url.includes('openfreemap')) {
+    if (mode === 'alldown' && url.includes('/mock/')) return new Response('err', { status: 500 });
+    if ((mode === 'ratelimit' || mode === 'down' || mode === 'alldown') && url.includes('openfreemap')) {
       if (url.endsWith('/planet')) return new Response(JSON.stringify({ tiles: ['https://tiles.openfreemap.org/mock/{z}/{x}/{y}.pbf'] }));
       return new Response(new Uint8Array(0)); // leere Kachel
     }
@@ -206,7 +210,53 @@ async function e2e(F) {
   check('E2E: Kachel-Fallback wurde abgefragt', calls.some(u => u.includes('/mock/14/')));
   check('E2E: Log meldet Rate-Limit', /Rate-Limit erkannt/.test(doc.getElementById('log').textContent));
 
+  // Cooldown: direkt nach dem Rate-Limit keine Overpass-Anfrage, auch nicht in einem neuen Lauf
+  calls.length = 0;
+  await w.PSP_APP.search(true);
+  check('E2E: Cooldown nach Rate-Limit gilt auch für den nächsten Lauf', calls.filter(u => u.includes('interpreter')).length === 0
+    && /Overpass pausiert bis/.test(doc.getElementById('log').textContent));
+
+  // Schutzschalter: alle Server liefern dauerhaft 504 → höchstens 6 Anfragen, dann Vektor-Tiles
+  w.PSP_APP.state.cooldownUntil = 0; mode = 'down'; calls.length = 0;
+  await w.PSP_APP.search(true);
+  const nDown = calls.filter(u => u.includes('interpreter')).length;
+  check('E2E: Schutzschalter bei Dauer-504 (≤ 6 Anfragen statt bis zu 30)', nDown <= 6 && nDown >= 3, nDown + ' Anfragen');
+  check('E2E: nach Schutzschalter Vektor-Tiles verwendet', [...doc.querySelectorAll('#segChips .chip')].some(c => c.classList.contains('tiles')));
+
+  // Alles fällt aus → Abschnitte NICHT dauerhaft als leer speichern, Warnung, beim nächsten Lauf erneuter Versuch
+  w.PSP_APP.state.cooldownUntil = 0; mode = 'alldown'; calls.length = 0;
+  await w.PSP_APP.search(true);
+  const stF = w.PSP_APP.state;
+  const failedN = [...stF.seg.failed.values()].reduce((n, x) => n + x.size, 0);
+  check('E2E: Totalausfall → Abschnitte als fehlgeschlagen (nicht als leer) markiert', failedN > 0 && stF.seg.data.size === 0, failedN + ' / ' + stF.seg.data.size);
+  check('E2E: Warnung „Auswahl unvollständig“ angezeigt', /fehlgeschlagen.*unvollständig/.test(doc.getElementById('warnings').textContent));
+  mode = 'ratelimit-tiles-ok'; calls.length = 0;
+  w.PSP_APP.state.cooldownUntil = 0;
+  // Nur Kacheln wieder verfügbar machen: Overpass bleibt im Cooldown, Tiles liefern (leere) Kacheln
+  w.PSP_APP.state.cooldownUntil = Date.now() + 600000;
+  mode = 'down';
+  doc.getElementById('d_water').value = 14; w.PSP_APP.onSettingsChanged(); await waitIdle();
+  check('E2E: nächster Lauf versucht fehlgeschlagene Abschnitte erneut', w.PSP_APP.state.seg.data.size > 0
+    && [...w.PSP_APP.state.seg.failed.values()].reduce((n, x) => n + x.size, 0) === 0);
+
+  // XSS: präparierte ID / Name aus einer manipulierten Server-Antwort darf kein HTML einschleusen
+  w.PSP_APP.state.cooldownUntil = 0; mode = 'xss'; calls.length = 0; w.__xss = 0;
+  await w.PSP_APP.search(true);
+  const xc = w.PSP_APP.state.cands.find(c => c.id.startsWith('node"'));
+  if (xc) { const xm = w.PSP_APP.markers.get(xc.id); xm.openPopup(); }
+  check('E2E: manipulierte ID/Name → kein eingeschleustes HTML', !!xc && !doc.querySelector('[onmouseover]') && !doc.querySelector('img[src="x"]')
+    && !doc.querySelector('.leaflet-popup a[href*="openstreetmap"]') && !w.__xss);
+  if (xc) w.PSP_APP.markers.get(xc.id).closePopup();
+
+  // Eingabegrenzen
+  doc.getElementById('offTrack').value = 50000; doc.getElementById('d_water').value = 0.01;
+  const lim = w.PSP_APP.readSettings();
+  check('E2E: Eingabegrenzen (max. 1000 m, min. 1 km)', lim.offTrack === 1000 && lim.types.water.D === 1
+    && doc.getElementById('offTrack').value === '1000', JSON.stringify([lim.offTrack, lim.types.water.D]));
+  doc.getElementById('offTrack').value = 300; doc.getElementById('d_water').value = 15;
+
   // Abfrage folgt dem Algorithmus: nur Wasser, D = 50 km > Route (20 km) → gar keine Anfrage nötig
+  w.PSP_APP.state.cooldownUntil = 0;
   mode = 'normal-ok'; calls.length = 0;
   for (const t of ['shop', 'food', 'fuel']) doc.getElementById('en_' + t).checked = false;
   doc.getElementById('d_water').value = 50;
@@ -243,6 +293,7 @@ async function run(appHtml, gpxText, gpxName) {
   if (gpxText) {
     const doc = new DOMParser().parseFromString(gpxText, 'application/xml');
     const parsed = P.parseGpxDoc(doc);
+    check(gpxName + ': Textprüfung (Export sicher) ohne Befund', P.checkGpxText(gpxText, parsed) === null, P.checkGpxText(gpxText, parsed));
     const tr = P.buildTrack(parsed.pts);
     out.appendChild(document.createTextNode(gpxName + ': ' + parsed.pts.length + ' Punkte, ' + tr.length.toFixed(1) + ' km, Anstieg ' + Math.round(tr.ascent) + ' m\n'));
     exportChecks(P, gpxName, gpxText, sampleFor(P, parsed.pts));

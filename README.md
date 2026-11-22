@@ -17,13 +17,35 @@
    `Netto (Supermarkt), 76km, 7:00-21:00`. Optional umgekehrte Richtung.
    Die Liste lässt sich auch als Markdown-Tabelle (z. B. für Obsidian) kopieren.
 
+## Für welche Routen?
+
+Die App ist für **Strecken von A nach B** gedacht (auch Rundtouren, die sich nicht selbst kreuzen).
+Nicht geeignet sind Routen, die **dieselbe Strecke mehrfach befahren** – etwa Hin- und Rückweg auf derselben Straße
+oder Achter-Schleifen: Jeder Punkt wird nur dem nächstgelegenen Durchgang zugeordnet, auf dem zweiten Durchgang
+fehlen die Kandidaten. Solche Routen am besten in einzelne A→B-Abschnitte teilen.
+
 ## Datenschutz & Fair Use
 
-- Alles läuft lokal im Browser. Die GPX-Datei wird nirgends hochgeladen; an die Overpass-Server gehen nur
-  Kartenausschnitte entlang der Route.
+- Auswahl und Export laufen lokal im Browser, die GPX-Datei selbst wird nicht hochgeladen.
+- **Für die Suche wird aber der Routenverlauf** (vereinfacht auf ca. 25 m, abschnittsweise) an öffentliche Overpass-Server
+  gesendet: `overpass-api.de` (Deutschland), bei Störungen ersatzweise `overpass.private.coffee` und `maps.mail.ru`
+  (VK, Russland). Beginnt die Route an der eigenen Wohnung, ist diese daraus ablesbar – ggf. Start/Ende vorher kürzen.
+- Im Fallback werden Vektor-Kacheln entlang der Route von OpenFreeMap geladen; die Kartenanzeige lädt Kacheln von
+  OpenStreetMap bzw. OpenFreeMap.
 - Overpass ist ein kostenloser, ehrenamtlich betriebener Dienst. Die App fragt deshalb nur die Abschnitte und
-  Typen ab, die der Auswahl-Algorithmus wirklich braucht, wartet zwischen Anfragen und stoppt bei einem
-  Rate-Limit (HTTP 429). Bitte trotzdem sparsam suchen.
+  Typen ab, die der Auswahl-Algorithmus wirklich braucht, nur im Korridor um die Route, wartet zwischen Anfragen,
+  pausiert Overpass nach einem Rate-Limit (HTTP 429) oder mehreren Fehlern für 2 Minuten (dann Vektor-Tiles) und
+  begrenzt die Eingaben (max. 1000 m vom Track). Bitte trotzdem sparsam suchen.
+
+## Bekannte Einschränkungen & Backlog
+
+- **Feiertage nur für Deutschland:** Öffnungszeiten mit `PH` (Feiertag) werden nach deutschen Feiertagen ausgewertet,
+  außer der Punkt hat ein `addr:country`-Tag (bei den meisten fehlt es). In der Schweiz, Österreich, Frankreich usw.
+  kann ein Laden an einem dortigen Feiertag daher fälschlich als geöffnet erscheinen (z. B. Zürich am 1. August).
+  Ausgewertet wird außerdem in der Zeitzone des Browsers, nicht in der des Punkts.
+  *Backlog:* Land (und Bundesland/Kanton) aus den Koordinaten bestimmen, z. B. über einen kompakten Grenzdatensatz,
+  und die Zeitzone des Punkts verwenden.
+- **Routen mit mehrfach befahrenen Abschnitten** – siehe [Für welche Routen?](#für-welche-routen).
 
 ## Lokal nutzen
 
