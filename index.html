@@ -952,6 +952,13 @@
   if (window.PSP_NO_APP) return; // Tests können die App-Initialisierung abschalten
   const P = window.PSP;
   const $ = id => document.getElementById(id);
+  // CDN blockiert / offline → ohne Leaflet geht nichts; sichtbar melden statt still zu scheitern
+  if (!window.L) {
+    $('routeInfo').innerHTML = '<div class="msg err"><b>Kartenbibliothek konnte nicht geladen werden</b> (offline, '
+      + 'Werbe-/Skriptblocker oder CDN gestört?). Bitte Verbindung prüfen und die Seite neu laden.</div>';
+    $('drop').setAttribute('aria-disabled', 'true');
+    return;
+  }
 
   /* ---------- Konfiguration ---------- */
   const OVERPASS_ENDPOINTS = [

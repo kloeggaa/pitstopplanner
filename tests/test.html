@@ -316,6 +316,26 @@ async function e2e(F) {
     && /Abgebrochen/.test(doc.getElementById('log').textContent));
 }
 
+/* ---------- m11: Leaflet fehlt (CDN blockiert) → sichtbare Fehlermeldung statt toter Seite ---------- */
+async function cdnFailureCheck(appHtml) {
+  // App ohne Leaflet-<script> laden, als wäre cdnjs nicht erreichbar; Fehler der Inline-Skripte mitschreiben
+  const noLeaflet = appHtml.replace(/<script[^>]*leaflet\.min\.js[^>]*><\/script>/, '')
+    .replace('<head>', '<head><script>window.__errs = []; addEventListener("error", e => __errs.push((e.filename || "") + " " + e.message));<\/script>');
+  const frame = document.createElement('iframe');
+  frame.style.display = 'none';
+  const loaded = new Promise(r => frame.onload = r);
+  frame.srcdoc = noLeaflet;
+  document.body.appendChild(frame);
+  await loaded;
+  const w = frame.contentWindow;
+  const info = w.document.getElementById('routeInfo').textContent;
+  const appErrs = w.__errs.filter(m => m.startsWith('about:srcdoc'));   // nur Fehler aus den Inline-Skripten der App
+  check('m11: Testaufbau – Leaflet blockiert', noLeaflet !== appHtml && typeof w.L === 'undefined');
+  check('m11: ohne Leaflet → Meldung „Kartenbibliothek konnte nicht geladen werden“', /Kartenbibliothek konnte nicht geladen werden/.test(info), info);
+  check('m11: ohne Leaflet → kein Skriptfehler der App', appErrs.length === 0, appErrs.join(' | '));
+  frame.remove();
+}
+
 async function run(appHtml, gpxText, gpxName) {
   const P = loadCore(appHtml);
   const F = window.PSP_FIXTURES;
@@ -337,6 +357,7 @@ async function run(appHtml, gpxText, gpxName) {
     exportChecks(P, gpxName, gpxText, sampleFor(P, parsed.pts));
   }
   if (!params.has('noe2e')) {
+    try { await cdnFailureCheck(appHtml); } catch (e) { check('m11: ohne Ausnahme durchgelaufen', false, e.message); }
     try { await e2e(F); } catch (e) { check('E2E: ohne Ausnahme durchgelaufen', false, e.message); }
   }
   const fail = results.filter(r => !r[0]).length;
