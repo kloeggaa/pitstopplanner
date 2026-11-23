@@ -132,10 +132,11 @@ async function e2e(F) {
         lat: F.posAt(5, 20).lat, lon: F.posAt(5, 20).lon, tags: { amenity: 'drinking_water', name: '<img src=x onerror="window.__xss=1">' } }] }));
       if (mode === 'normal' && n === 1) return new Response('Gateway Timeout', { status: 504 });
       if (mode === 'ratelimit' && n === 2) throw new TypeError('Failed to fetch');
+      if (mode === 'netdown') throw new TypeError('Failed to fetch');
       return new Response(JSON.stringify({ elements: F.mockOverpassElements() }), { status: 200 });
     }
     if (mode === 'alldown' && url.includes('/mock/')) return new Response('err', { status: 500 });
-    if ((mode === 'ratelimit' || mode === 'down' || mode === 'alldown') && url.includes('openfreemap')) {
+    if ((mode === 'ratelimit' || mode === 'netdown' || mode === 'down' || mode === 'alldown') && url.includes('openfreemap')) {
       if (url.endsWith('/planet')) return new Response(JSON.stringify({ tiles: ['https://tiles.openfreemap.org/mock/{z}/{x}/{y}.pbf'] }));
       return new Response(new Uint8Array(0)); // leere Kachel
     }
@@ -199,39 +200,59 @@ async function e2e(F) {
   const g = doc.getElementById('warnings').textContent;
   check('E2E: Lückenwarnung wird angezeigt (Tankstelle)', /Tankstelle:.*längste Lücke/.test(g), g);
 
-  // Rate-Limit: nach "Failed to fetch" keine weiteren Overpass-Anfragen, Rest über Vektor-Tiles
+  // M1: "Failed to fetch" (429 ohne CORS / Server nicht erreichbar) → nur DIESEN Server pausieren, nächsten probieren
+  const hostOf = u => new URL(u).host;
+  const resetCooldown = () => { w.PSP_APP.state.cooldownUntil = 0; w.PSP_APP.state.epDownUntil.fill(0); };
   calls.length = 0; mode = 'ratelimit';
   await w.PSP_APP.search();
   const ip2 = calls.filter(u => u.includes('interpreter'));
   const chips = [...doc.querySelectorAll('#segChips .chip')].map(c => c.className.replace('chip ', ''));
-  check('E2E: nach Rate-Limit keine weiteren Overpass-Anfragen', ip2.length === 2, ip2.length + ' Anfragen');
-  check('E2E: Daten aus Overpass (vor dem Limit) und Vektor-Tiles (danach)',
-    w.PSP_APP.state.raw.some(r => r.source === 'overpass') && chips.includes('tiles'), chips.join(','));
-  check('E2E: Kachel-Fallback wurde abgefragt', calls.some(u => u.includes('/mock/14/')));
-  check('E2E: Log meldet Rate-Limit', /Rate-Limit erkannt/.test(doc.getElementById('log').textContent));
+  const downHost = ip2[1] && hostOf(ip2[1]);
+  check('E2E: M1 – nach "Failed to fetch" wird der nächste Server versucht', ip2.length >= 3 && hostOf(ip2[2]) !== downHost,
+    ip2.map(hostOf).join(' → '));
+  check('E2E: M1 – betroffener Server in diesem Lauf nicht mehr angefragt', ip2.slice(2).every(u => hostOf(u) !== downHost),
+    ip2.map(hostOf).join(' → '));
+  check('E2E: M1 – alle Abschnitte über Overpass, kein Kachel-Fallback', !chips.includes('tiles') && !calls.some(u => u.includes('/mock/14/')),
+    chips.join(','));
+  check('E2E: M1 – Log meldet pausierten Server', new RegExp(downHost.replace(/\./g, '\\.') + ' pausiert bis').test(doc.getElementById('log').textContent));
+  // Pause des einen Servers gilt auch im nächsten Lauf, die anderen werden weiter genutzt
+  calls.length = 0; mode = 'normal-ok';
+  await w.PSP_APP.search(true);
+  const ip3 = calls.filter(u => u.includes('interpreter'));
+  check('E2E: M1 – nächster Lauf meidet den pausierten Server, nutzt die anderen', ip3.length > 0 && ip3.every(u => hostOf(u) !== downHost),
+    ip3.map(hostOf).join(' → '));
 
-  // Cooldown: direkt nach dem Rate-Limit keine Overpass-Anfrage, auch nicht in einem neuen Lauf
+  // M1: alle Server "Failed to fetch" → jeder genau einmal, dann Vektor-Tiles und globaler Cooldown
+  resetCooldown(); calls.length = 0; mode = 'netdown';
+  await w.PSP_APP.search(true);
+  const ip4 = calls.filter(u => u.includes('interpreter')).map(hostOf);
+  check('E2E: M1 – alle Server nicht erreichbar → jeder genau einmal versucht', ip4.length === 3 && new Set(ip4).size === 3, ip4.join(' → '));
+  check('E2E: M1 – danach Vektor-Tiles', [...doc.querySelectorAll('#segChips .chip')].some(c => c.classList.contains('tiles'))
+    && calls.some(u => u.includes('/mock/14/')));
+  check('E2E: Log meldet Ausfall aller Server', /Alle Overpass-Server nicht erreichbar oder Rate-Limit/.test(doc.getElementById('log').textContent));
+
+  // Cooldown: direkt danach keine Overpass-Anfrage, auch nicht in einem neuen Lauf
   calls.length = 0;
   await w.PSP_APP.search(true);
-  check('E2E: Cooldown nach Rate-Limit gilt auch für den nächsten Lauf', calls.filter(u => u.includes('interpreter')).length === 0
+  check('E2E: Cooldown nach Ausfall aller Server gilt auch für den nächsten Lauf', calls.filter(u => u.includes('interpreter')).length === 0
     && /Overpass pausiert bis/.test(doc.getElementById('log').textContent));
 
   // Schutzschalter: alle Server liefern dauerhaft 504 → höchstens 6 Anfragen, dann Vektor-Tiles
-  w.PSP_APP.state.cooldownUntil = 0; mode = 'down'; calls.length = 0;
+  resetCooldown(); mode = 'down'; calls.length = 0;
   await w.PSP_APP.search(true);
   const nDown = calls.filter(u => u.includes('interpreter')).length;
   check('E2E: Schutzschalter bei Dauer-504 (≤ 6 Anfragen statt bis zu 30)', nDown <= 6 && nDown >= 3, nDown + ' Anfragen');
   check('E2E: nach Schutzschalter Vektor-Tiles verwendet', [...doc.querySelectorAll('#segChips .chip')].some(c => c.classList.contains('tiles')));
 
   // Alles fällt aus → Abschnitte NICHT dauerhaft als leer speichern, Warnung, beim nächsten Lauf erneuter Versuch
-  w.PSP_APP.state.cooldownUntil = 0; mode = 'alldown'; calls.length = 0;
+  resetCooldown(); mode = 'alldown'; calls.length = 0;
   await w.PSP_APP.search(true);
   const stF = w.PSP_APP.state;
   const failedN = [...stF.seg.failed.values()].reduce((n, x) => n + x.size, 0);
   check('E2E: Totalausfall → Abschnitte als fehlgeschlagen (nicht als leer) markiert', failedN > 0 && stF.seg.data.size === 0, failedN + ' / ' + stF.seg.data.size);
   check('E2E: Warnung „Auswahl unvollständig“ angezeigt', /fehlgeschlagen.*unvollständig/.test(doc.getElementById('warnings').textContent));
   mode = 'ratelimit-tiles-ok'; calls.length = 0;
-  w.PSP_APP.state.cooldownUntil = 0;
+  resetCooldown();
   // Nur Kacheln wieder verfügbar machen: Overpass bleibt im Cooldown, Tiles liefern (leere) Kacheln
   w.PSP_APP.state.cooldownUntil = Date.now() + 600000;
   mode = 'down';
@@ -240,7 +261,7 @@ async function e2e(F) {
     && [...w.PSP_APP.state.seg.failed.values()].reduce((n, x) => n + x.size, 0) === 0);
 
   // XSS: präparierte ID / Name aus einer manipulierten Server-Antwort darf kein HTML einschleusen
-  w.PSP_APP.state.cooldownUntil = 0; mode = 'xss'; calls.length = 0; w.__xss = 0;
+  resetCooldown(); mode = 'xss'; calls.length = 0; w.__xss = 0;
   await w.PSP_APP.search(true);
   const xc = w.PSP_APP.state.cands.find(c => c.id.startsWith('node"'));
   if (xc) { const xm = w.PSP_APP.markers.get(xc.id); xm.openPopup(); }
@@ -256,7 +277,7 @@ async function e2e(F) {
   doc.getElementById('offTrack').value = 300; doc.getElementById('d_water').value = 15;
 
   // Abfrage folgt dem Algorithmus: nur Wasser, D = 50 km > Route (20 km) → gar keine Anfrage nötig
-  w.PSP_APP.state.cooldownUntil = 0;
+  resetCooldown();
   mode = 'normal-ok'; calls.length = 0;
   for (const t of ['shop', 'food', 'fuel']) doc.getElementById('en_' + t).checked = false;
   doc.getElementById('d_water').value = 50;

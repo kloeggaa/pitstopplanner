@@ -34,7 +34,8 @@ fehlen die Kandidaten. Solche Routen am besten in einzelne A→B-Abschnitte teil
   OpenStreetMap bzw. OpenFreeMap.
 - Overpass ist ein kostenloser, ehrenamtlich betriebener Dienst. Die App fragt deshalb nur die Abschnitte und
   Typen ab, die der Auswahl-Algorithmus wirklich braucht, nur im Korridor um die Route, wartet zwischen Anfragen,
-  pausiert Overpass nach einem Rate-Limit (HTTP 429) oder mehreren Fehlern für 2 Minuten (dann Vektor-Tiles) und
+  pausiert einen Overpass-Server nach einem Rate-Limit (HTTP 429) oder Netzwerkfehler für 2 Minuten und weicht auf
+  die anderen aus; sind alle pausiert oder häufen sich Fehler, ruht Overpass 2 Minuten ganz (dann Vektor-Tiles) und
   begrenzt die Eingaben (max. 1000 m vom Track). Bitte trotzdem sparsam suchen.
 
 ## Bekannte Einschränkungen & Backlog

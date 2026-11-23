@@ -972,7 +972,8 @@
     overrides: new Map(),  // manuelle Änderungen: id → true/false
     applied: null,         // zuletzt angewendete Einstellungen
     busy: false, cancel: false, controller: null,
-    cooldownUntil: 0,      // bis wann Overpass pausiert (nach 429 / Schutzschalter), gilt über Läufe hinweg
+    cooldownUntil: 0,      // bis wann Overpass ganz pausiert (alle Server gesperrt / Schutzschalter), gilt über Läufe hinweg
+    epDownUntil: OVERPASS_ENDPOINTS.map(() => 0),   // je Server: pausiert bis (nach 429 / Netzwerkfehler), gilt über Läufe hinweg
   };
 
   /* ---------- Einstellungen ---------- */
@@ -1158,7 +1159,7 @@
         method: 'POST', body: 'data=' + encodeURIComponent(query), signal: ctrl.signal,
         headers: { 'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8' },
       });
-      if (res.status === 429) throw Object.assign(new Error('HTTP 429 (Rate-Limit)'), { rateLimit: true });
+      if (res.status === 429) throw Object.assign(new Error('HTTP 429 (Rate-Limit)'), { endpointDown: true });
       if (!res.ok) throw new Error('HTTP ' + res.status);
       const txt = await res.text();
       let json;
@@ -1170,7 +1171,8 @@
       if (e.name === 'AbortError') throw new Error(state.cancel ? 'abgebrochen' : 'Timeout nach 60 s');
       // 429 kommt oft ohne CORS-Header → im Browser nur "Failed to fetch"
       // (Prüfung über den Namen statt instanceof – funktioniert auch über Fenstergrenzen hinweg)
-      if (e && e.name === 'TypeError') throw Object.assign(new Error('Netzwerkfehler – vermutlich Rate-Limit (429 ohne CORS)'), { rateLimit: true });
+      // (oder der Server ist nicht erreichbar / blockiert) → nur DIESEN Server pausieren, nächsten probieren
+      if (e && e.name === 'TypeError') throw Object.assign(new Error('Netzwerkfehler – nicht erreichbar oder Rate-Limit (429 ohne CORS)'), { endpointDown: true });
       throw e;
     } finally { clearTimeout(timer); state.controller = null; }
   }
@@ -1269,14 +1271,16 @@
 
   /**
    * Einen Abschnitt abfragen: Overpass (Endpunkt-Failover, bis zu 4 Wiederholungsrunden mit Backoff).
-   * Bei 429 / "Failed to fetch" keine weiteren Overpass-Anfragen in diesem Lauf → Vektor-Tiles.
+   * Bei 429 / "Failed to fetch" wird nur dieser Server für COOLDOWN_S pausiert und der nächste probiert;
+   * erst wenn alle Server pausiert sind (oder der Schutzschalter greift) → Vektor-Tiles.
    */
   async function fetchSegment(o, types) {
     const seg = state.seg.list[o];
     const label = 'Abschnitt ' + ((state.applied.reverse ? state.seg.list.length - 1 - o : o) + 1) + ' [' + types.map(t => TYPE_SHORT[t]).join(', ') + ']';
     const q = overpassQuery(o, types);
     const doneTitle = extra => { const d = state.seg.data.get(o); return 'abgefragt: ' + [...d.keys()].map(t => TYPE_SHORT[t]).join(', ') + ' – ' + extra; };
-    const overpassOff = () => state.cancel || state.overpassOff || Date.now() < state.cooldownUntil;
+    const epDown = ei => Date.now() < state.epDownUntil[ei];
+    const overpassOff = () => state.cancel || state.overpassOff || Date.now() < state.cooldownUntil || OVERPASS_ENDPOINTS.every((_, ei) => epDown(ei));
     if (Date.now() < state.cooldownUntil && !state.cooldownLogged) {
       state.cooldownLogged = true;
       log('Overpass pausiert bis ' + new Date(state.cooldownUntil).toLocaleTimeString('de-DE') + ' (Schonung nach Fehlern) – Vektor-Tiles werden verwendet');
@@ -1290,6 +1294,7 @@
       }
       for (let k = 0; k < OVERPASS_ENDPOINTS.length && !overpassOff(); k++) {
         const ei = (epStart + k) % OVERPASS_ENDPOINTS.length, ep = OVERPASS_ENDPOINTS[ei];
+        if (epDown(ei)) continue;        // nach 429 / Netzwerkfehler pausiert → nächster Server
         const host = new URL(ep).host;
         setStatus(o, 'running', 'läuft (' + host + ')');
         try {
@@ -1304,12 +1309,19 @@
           log(label + ': ' + host + ' – ' + e.message);
           if (state.cancel) break;
           state.failStreak = (state.failStreak || 0) + 1;
-          if (e.rateLimit || state.failStreak >= MAX_FAIL_STREAK) {
-            // Rate-Limit oder Schutzschalter: Overpass für diesen Lauf aus und für COOLDOWN_S pausieren
+          if (e.endpointDown) {
+            // Rate-Limit / nicht erreichbar: nur diesen Server pausieren, die anderen weiter nutzen
+            state.epDownUntil[ei] = Date.now() + COOLDOWN_S * 1000;
+            log(host + ' pausiert bis ' + new Date(state.epDownUntil[ei]).toLocaleTimeString('de-DE')
+              + (overpassOff() ? '' : ' – nächster Server wird versucht'));
+          }
+          const allDown = OVERPASS_ENDPOINTS.every((_, j) => epDown(j));
+          if (allDown || state.failStreak >= MAX_FAIL_STREAK) {
+            // alle Server gesperrt oder Schutzschalter: Overpass für diesen Lauf aus und für COOLDOWN_S pausieren
             state.overpassOff = true;
             state.cooldownUntil = Date.now() + COOLDOWN_S * 1000;
             state.cooldownLogged = true;
-            log((e.rateLimit ? 'Rate-Limit erkannt' : state.failStreak + ' Fehlversuche in Folge') + ' – keine weiteren Overpass-Anfragen bis '
+            log((allDown ? 'Alle Overpass-Server nicht erreichbar oder Rate-Limit' : state.failStreak + ' Fehlversuche in Folge') + ' – keine weiteren Overpass-Anfragen bis '
               + new Date(state.cooldownUntil).toLocaleTimeString('de-DE') + ', Abschnitte kommen jetzt aus den Vektor-Tiles');
           }
         }
