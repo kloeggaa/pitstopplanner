@@ -399,7 +399,9 @@
     bakery: 'Bäckerei', kiosk: 'Kiosk', butcher: 'Metzgerei', farm: 'Hofladen',
   };
   const FOOD_LABELS = { restaurant: 'Restaurant', biergarten: 'Restaurant', cafe: 'Café', fast_food: 'Imbiss' };
-  const FUEL_BAD_NAME = /kunden|betriebs|tankkarte|nur\s+mit\s+karte|card\s*only|lkw|truck|bundeswehr|werkstank/i;
+  const FUEL_BAD_NAME = /kunden|betriebs|tankkarte|nur\s+mit\s+karte|card\s*only|bundeswehr|werkstank/i;
+  // nur im Namen: "LKW-Tankstelle" ist ein Ausschluss, "mit LKW-Waschanlage" in description/note nicht
+  const FUEL_TRUCK_NAME = /lkw|truck/i;
   const FUEL_BAD_ACCESS = /^(private|customers|no|permit|delivery|agricultural|forestry)$/;
   const FLEET_CARD_KEYS = /^payment:(dkv|uta|fuel_cards|fleet_cards|e100|shell_card|aral_card|routex|eurowag|as24|tankpool24|ids|logpay|bp_plus)$/;
   const PUBLIC_PAYMENT_KEYS = /^payment:(cash|coins|notes|debit_cards|credit_cards|girocard|maestro|mastercard|visa|v_pay|contactless|american_express|apple_pay|google_pay)$/;
@@ -419,7 +421,7 @@
       if (FUEL_BAD_ACCESS.test(access)) return null;
       if (tags.hgv === 'only') return null;
       const text = [tags.name, tags.operator, tags.brand, tags.description, tags.note].filter(Boolean).join(' ');
-      if (FUEL_BAD_NAME.test(text)) return null;
+      if (FUEL_BAD_NAME.test(text) || FUEL_TRUCK_NAME.test(tags.name || '')) return null;
       // reine Ladesäulen-Einträge
       if (tags['fuel:electricity'] === 'yes' && !Object.keys(tags).some(k => k.startsWith('fuel:') && k !== 'fuel:electricity' && tags[k] === 'yes')
           && /lade|charg/i.test(text)) return null;
@@ -471,7 +473,8 @@
     const m = TILE_MAP[props.subclass];
     if (!m) return null;
     // Kacheln haben keine access-/payment-Tags – Kunden-/Betriebstankstellen wenigstens am Namen erkennen
-    if (m[0] === 'fuel' && FUEL_BAD_NAME.test([props.name, props['name:de']].filter(Boolean).join(' '))) return null;
+    const tileName = [props.name, props['name:de']].filter(Boolean).join(' ');
+    if (m[0] === 'fuel' && (FUEL_BAD_NAME.test(tileName) || FUEL_TRUCK_NAME.test(tileName))) return null;
     return { type: m[0], label: m[1] };
   }
 

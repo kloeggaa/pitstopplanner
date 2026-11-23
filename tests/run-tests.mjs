@@ -287,6 +287,17 @@ test('Klassifizierung (M2): öffentliche Markentankstelle mit Flottenkarten blei
   assert.equal(c({ amenity: 'fuel', name: 'Tankpunkt', 'payment:dkv': 'yes', 'payment:uta': 'yes' }), null);
   assert.equal(c({ amenity: 'fuel', brand: 'Aral', 'payment:dkv': 'yes', access: 'customers' }), null);
 });
+test('Klassifizierung (m3): "LKW"/"truck" schließt nur im Namen aus', () => {
+  const c = t => { const r = P.classifyOsm(t); return r ? r.type + ':' + r.label : null; };
+  assert.equal(c({ amenity: 'fuel', name: 'Shell', brand: 'Shell', description: 'mit LKW-Waschanlage' }), 'fuel:Tankstelle');
+  assert.equal(c({ amenity: 'fuel', name: 'Esso', note: 'truck parking behind the shop' }), 'fuel:Tankstelle');
+  assert.equal(c({ amenity: 'fuel', name: 'Agip', operator: 'Truck & Car Service GmbH' }), 'fuel:Tankstelle');
+  assert.equal(c({ amenity: 'fuel', name: 'LKW-Tankstelle Müller' }), null);
+  assert.equal(c({ amenity: 'fuel', name: 'Truck Stop Diesel' }), null);
+  // die übrigen Ausschlüsse prüfen weiterhin alle Textfelder
+  assert.equal(c({ amenity: 'fuel', name: 'Tankstelle', description: 'nur mit Karte' }), null);
+  assert.equal(P.classifyTilePoi({ class: 'fuel', subclass: 'fuel', name: 'LKW Tankstelle' }), null);
+});
 test('Vektor-Tiles: subclass-Mapping (Ladesäulen ausgeschlossen)', () => {
   assert.equal(P.classifyTilePoi({ class: 'fuel', subclass: 'fuel' }).type, 'fuel');
   assert.equal(P.classifyTilePoi({ class: 'fuel', subclass: 'charging_station' }), null);
