@@ -423,11 +423,16 @@
       // reine Ladesäulen-Einträge
       if (tags['fuel:electricity'] === 'yes' && !Object.keys(tags).some(k => k.startsWith('fuel:') && k !== 'fuel:electricity' && tags[k] === 'yes')
           && /lade|charg/i.test(text)) return null;
-      // nur Flottenkarten akzeptiert, keine öffentlichen Zahlungsmittel
+      // nur Flottenkarten akzeptiert: Flottenkarten-Tags allein reichen NICHT als Beleg – viele öffentliche
+      // Markentankstellen haben payment:dkv=yes o. ä., aber keine payment:cash/…cards-Tags.
+      // Ausgeschlossen wird nur, wenn öffentliche Zahlung ausdrücklich verneint ist (payment:cash=no)
+      // oder die Station keine Marke hat (anonyme Flotten-/Betriebstankstelle).
       const keys = Object.keys(tags);
       const fleet = keys.some(k => FLEET_CARD_KEYS.test(k) && tags[k] === 'yes');
       const pub = keys.some(k => PUBLIC_PAYMENT_KEYS.test(k) && tags[k] === 'yes');
-      if (fleet && !pub) return null;
+      const branded = !!(tags.brand || tags['brand:wikidata']);
+      const publicDenied = tags['payment:cash'] === 'no';
+      if (fleet && !pub && (!branded || publicDenied)) return null;
       return { type: 'fuel', label: 'Tankstelle' };
     }
     // Restaurant / Café / Imbiss

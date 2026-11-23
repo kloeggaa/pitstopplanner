@@ -277,6 +277,16 @@ test('Klassifizierung: Regeln & Ausschlüsse', () => {
   assert.equal(c({ amenity: 'fuel', 'payment:dkv': 'yes', 'payment:cash': 'yes' }), 'fuel:Tankstelle');
   assert.equal(c({ amenity: 'charging_station' }), null);
 });
+test('Klassifizierung (M2): öffentliche Markentankstelle mit Flottenkarten bleibt', () => {
+  const c = t => { const r = P.classifyOsm(t); return r ? r.type + ':' + r.label : null; };
+  // häufiges OSM-Tagging: payment:dkv=yes ohne payment:cash
+  assert.equal(c({ amenity: 'fuel', name: 'Aral', brand: 'Aral', operator: 'Aral AG', 'payment:dkv': 'yes', opening_hours: '24/7' }), 'fuel:Tankstelle');
+  assert.equal(c({ amenity: 'fuel', name: 'Shell', 'brand:wikidata': 'Q110716465', 'payment:uta': 'yes', 'payment:routex': 'yes' }), 'fuel:Tankstelle');
+  // ausdrückliche Belege weiterhin ausgeschlossen
+  assert.equal(c({ amenity: 'fuel', brand: 'Aral', 'payment:dkv': 'yes', 'payment:cash': 'no' }), null);
+  assert.equal(c({ amenity: 'fuel', name: 'Tankpunkt', 'payment:dkv': 'yes', 'payment:uta': 'yes' }), null);
+  assert.equal(c({ amenity: 'fuel', brand: 'Aral', 'payment:dkv': 'yes', access: 'customers' }), null);
+});
 test('Vektor-Tiles: subclass-Mapping (Ladesäulen ausgeschlossen)', () => {
   assert.equal(P.classifyTilePoi({ class: 'fuel', subclass: 'fuel' }).type, 'fuel');
   assert.equal(P.classifyTilePoi({ class: 'fuel', subclass: 'charging_station' }), null);
