@@ -119,11 +119,11 @@
     <section class="panel" id="settingsPanel">
       <h2>2. Einstellungen</h2>
       <table class="types">
-        <tr><th></th><th></th><th class="muted" style="text-align:right;font-weight:normal">max. Abstand</th></tr>
-        <tr><td><input type="checkbox" id="en_water" checked></td><td><label for="en_water"><span class="dot" style="background:var(--water)"></span>Wasser</label></td><td><input type="number" id="d_water" min="1" max="500" step="1" value="15"> km</td></tr>
-        <tr><td><input type="checkbox" id="en_shop" checked></td><td><label for="en_shop"><span class="dot" style="background:var(--shop)"></span>Einkauf</label></td><td><input type="number" id="d_shop" min="1" max="500" step="1" value="30"> km</td></tr>
-        <tr><td><input type="checkbox" id="en_food" checked></td><td><label for="en_food"><span class="dot" style="background:var(--food)"></span>Restaurant / Café</label></td><td><input type="number" id="d_food" min="1" max="500" step="1" value="40"> km</td></tr>
-        <tr><td><input type="checkbox" id="en_fuel" checked></td><td><label for="en_fuel"><span class="dot" style="background:var(--fuel)"></span>Tankstelle</label></td><td><input type="number" id="d_fuel" min="1" max="500" step="1" value="40"> km</td></tr>
+        <tr><th scope="col" aria-label="aktiv"></th><th scope="col" aria-label="Typ"></th><th scope="col" class="muted" style="text-align:right;font-weight:normal">max. Abstand</th></tr>
+        <tr><td><input type="checkbox" id="en_water" checked></td><td><label for="en_water"><span class="dot" style="background:var(--water)"></span>Wasser</label></td><td><input type="number" id="d_water" aria-label="max. Abstand Wasser (km)" min="1" max="500" step="1" value="15"> km</td></tr>
+        <tr><td><input type="checkbox" id="en_shop" checked></td><td><label for="en_shop"><span class="dot" style="background:var(--shop)"></span>Einkauf</label></td><td><input type="number" id="d_shop" aria-label="max. Abstand Einkauf (km)" min="1" max="500" step="1" value="30"> km</td></tr>
+        <tr><td><input type="checkbox" id="en_food" checked></td><td><label for="en_food"><span class="dot" style="background:var(--food)"></span>Restaurant / Café</label></td><td><input type="number" id="d_food" aria-label="max. Abstand Restaurant / Café (km)" min="1" max="500" step="1" value="40"> km</td></tr>
+        <tr><td><input type="checkbox" id="en_fuel" checked></td><td><label for="en_fuel"><span class="dot" style="background:var(--fuel)"></span>Tankstelle</label></td><td><input type="number" id="d_fuel" aria-label="max. Abstand Tankstelle (km)" min="1" max="500" step="1" value="40"> km</td></tr>
       </table>
       <div class="row"><label for="offTrack">max. Entfernung vom Track</label><span><input type="number" id="offTrack" min="10" max="1000" step="10" value="300"> m</span></div>
       <div class="row"><label for="rideDate">Fahrtag</label><input type="date" id="rideDate"></div>

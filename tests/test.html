@@ -143,6 +143,12 @@ async function e2e(F) {
     return realFetch(url, opts);
   };
   const doc = w.document;
+  // m6: jedes Bedienelement hat einen zugänglichen Namen (Label, aria-label/-labelledby oder Button-Text)
+  const unnamed = [...doc.querySelectorAll('input:not([type=file]), select, textarea, button')]
+    .filter(el => !(el.labels && el.labels.length) && !el.getAttribute('aria-label') && !el.getAttribute('aria-labelledby')
+      && !(el.tagName === 'BUTTON' && el.textContent.trim()))
+    .map(el => el.id || el.outerHTML.slice(0, 60));
+  check('E2E: m6 – alle Bedienelemente haben einen zugänglichen Namen', unnamed.length === 0, unnamed.join(', '));
   // wartet, bis eine (ggf. automatisch gestartete) Nachlade-Suche fertig ist
   const waitIdle = async () => { await sleep(20); for (let i = 0; i < 6000 && w.PSP_APP.state.busy; i++) await sleep(100); };
   doc.getElementById('rideDate').value = '2026-11-23';
