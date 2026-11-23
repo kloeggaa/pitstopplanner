@@ -1135,7 +1135,8 @@
   let lastRequestAt = 0;
   async function politePause() {
     const wait = lastRequestAt + REQUEST_GAP_MS + Math.random() * 500 - Date.now();
-    if (wait > 0) await sleep(wait);
+    if (wait > 0) await cancellableSleep(wait);   // „Abbrechen“ beendet auch die Pause
+    if (state.cancel) return;
     lastRequestAt = Date.now();
   }
   function log(msg) {
@@ -1155,6 +1156,8 @@
   /** Eine Anfrage an einen Endpunkt; wirft Fehler mit lesbarer Meldung */
   async function fetchOverpass(endpoint, query) {
     await politePause();
+    // während der Pause abgebrochen → keine Anfrage mehr senden (kein laufender Controller, den man abbrechen könnte)
+    if (state.cancel) throw new Error('abgebrochen');
     state.reqCount = (state.reqCount || 0) + 1;   // echte HTTP-Anfragen (inkl. Wiederholungen/Failover)
     const ctrl = new AbortController();
     state.controller = ctrl;
@@ -1418,6 +1421,7 @@
       const url = tileTemplate.replace('{z}', t.z).replace('{x}', t.x).replace('{y}', t.y);
       try {
         await sleep(150);
+        if (state.cancel) break;
         const res = await fetch(url);
         if (!res.ok) throw new Error('HTTP ' + res.status);
         const layer = P.decodeMvtLayer(new Uint8Array(await res.arrayBuffer()), 'poi');

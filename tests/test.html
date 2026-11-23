@@ -297,6 +297,23 @@ async function e2e(F) {
   w.PSP_APP.onSettingsChanged();
   await sleep(50);
   check('E2E: bereits geladene Abschnitte werden nicht erneut abgefragt', calls.filter(u => u.includes('interpreter')).length === n2 && !w.PSP_APP.state.busy);
+
+  // M3: „Abbrechen“ während der Pause zwischen zwei Anfragen → keine weitere Anfrage
+  resetCooldown(); mode = 'normal-ok';
+  doc.getElementById('d_water').value = 3; w.PSP_APP.onSettingsChanged(); await waitIdle();
+  calls.length = 0;
+  const ipN = () => calls.filter(u => u.includes('interpreter')).length;
+  const running = w.PSP_APP.search(true);
+  for (let i = 0; i < 300 && ipN() < 1; i++) await sleep(20);
+  await sleep(400);                                   // erste Antwort (Mock) ist da → jetzt in politePause()
+  const beforeCancel = ipN();
+  doc.getElementById('cancelBtn').click();
+  await sleep(3500);                                  // länger als die Pause (2,5–3 s)
+  await running;
+  check('E2E: M3 – Abbrechen in der Pause sendet keine weitere Anfrage', beforeCancel === 1 && ipN() === 1,
+    beforeCancel + ' vor / ' + ipN() + ' nach dem Abbruch');
+  check('E2E: M3 – Lauf endet als abgebrochen, keine Vektor-Tiles', !w.PSP_APP.state.busy && !calls.some(u => u.includes('/mock/14/'))
+    && /Abgebrochen/.test(doc.getElementById('log').textContent));
 }
 
 async function run(appHtml, gpxText, gpxName) {
