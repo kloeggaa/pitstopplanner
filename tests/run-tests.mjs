@@ -290,6 +290,11 @@ test('Klassifizierung (M2): öffentliche Markentankstelle mit Flottenkarten blei
 test('Vektor-Tiles: subclass-Mapping (Ladesäulen ausgeschlossen)', () => {
   assert.equal(P.classifyTilePoi({ class: 'fuel', subclass: 'fuel' }).type, 'fuel');
   assert.equal(P.classifyTilePoi({ class: 'fuel', subclass: 'charging_station' }), null);
+  // m4: Namens-Ausschlüsse gelten auch im Kachel-Fallback
+  assert.equal(P.classifyTilePoi({ class: 'fuel', subclass: 'fuel', name: 'Kundentankstelle Raiffeisen' }), null);
+  assert.equal(P.classifyTilePoi({ class: 'fuel', subclass: 'fuel', name: 'Tankstelle', 'name:de': 'Betriebstankstelle Stadtwerke' }), null);
+  assert.equal(P.classifyTilePoi({ class: 'fuel', subclass: 'fuel', name: 'Aral' }).type, 'fuel');
+  assert.equal(P.classifyTilePoi({ class: 'shop', subclass: 'supermarket', name: 'Kunden-Center Markt' }).type, 'shop');
   assert.equal(P.classifyTilePoi({ class: 'grocery', subclass: 'supermarket' }).label, 'Supermarkt');
   assert.equal(P.classifyTilePoi({ class: 'drinking_water', subclass: 'drinking_water' }).type, 'water');
   assert.equal(P.classifyTilePoi({ class: 'beer', subclass: 'biergarten' }).type, 'food');

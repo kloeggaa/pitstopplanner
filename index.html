@@ -469,7 +469,10 @@
   function classifyTilePoi(props) {
     // Nur subclass verwenden: class "fuel" umfasst z. B. auch subclass "charging_station"
     const m = TILE_MAP[props.subclass];
-    return m ? { type: m[0], label: m[1] } : null;
+    if (!m) return null;
+    // Kacheln haben keine access-/payment-Tags – Kunden-/Betriebstankstellen wenigstens am Namen erkennen
+    if (m[0] === 'fuel' && FUEL_BAD_NAME.test([props.name, props['name:de']].filter(Boolean).join(' '))) return null;
+    return { type: m[0], label: m[1] };
   }
 
   /* ---------- Mapbox-Vector-Tile-Decoder (minimal, nur was wir brauchen) ---------- */
