@@ -11,3 +11,6 @@ tests/.shot*
 .vscode/
 .idea/
 .DS_Store
+
+# Lokale Kartendateien (z. B. Garmin-IMG), nicht veröffentlichen
+maps/

@@ -502,6 +502,49 @@ test('Encoding: ISO-8859-1 wird gelesen und als UTF-8 deklariert', () => {
   assert.ok(P.forceUtf8Declaration(d.text).startsWith('<?xml version="1.0" encoding="UTF-8"?>'));
 });
 
+test('Offline-Daten: gridKey / gridKeysForBbox (Zellgrenzen, negative Koordinaten)', () => {
+  assert.equal(P.EXTRACT_PER_DEG, 10);
+  assert.equal(P.gridKey(47.37, 8.54), '473_85');
+  assert.equal(P.gridKey(47.3, 8.5), '473_85');            // Untergrenze gehört zur Zelle
+  assert.equal(P.gridKey(-0.05, -0.05), '-1_-1');
+  const keys = P.gridKeysForBbox({ s: 47.29, n: 47.31, w: 8.59, e: 8.61 });
+  assert.deepEqual([...keys].sort(), ['472_85', '472_86', '473_85', '473_86']);
+  assert.deepEqual([...P.gridKeysForBbox({ s: 47.31, n: 47.32, w: 8.51, e: 8.52 })], ['473_85']);
+});
+test('Offline-Daten: pack/unpack ergibt denselben Punkt wie Overpass', () => {
+  const el = { id: 'way/42', lat: 47.123456, lon: 8.654321, tags: { shop: 'bakery', name: 'Beck', opening_hours: 'Mo-Fr 06:00-18:00', 'addr:country': 'CH', foo: 'bar' } };
+  const cls = P.classifyOsm(el.tags);
+  const row = P.packExtractPoint(el, cls);
+  assert.deepEqual(JSON.parse(JSON.stringify(row)), ['w42', 47.12346, 8.65432, 'shop', 'Bäckerei', 'Beck', 'Mo-Fr 06:00-18:00', 'CH']);
+  const p = P.unpackExtractPoint(row, '2026-11-24');
+  assert.equal(p.id, 'way/42'); assert.equal(p.source, 'extract'); assert.equal(p.type, 'shop');
+  assert.equal(p.tags.opening_hours, 'Mo-Fr 06:00-18:00'); assert.equal(p.tags['addr:country'], 'CH'); assert.equal(p.osmDate, '2026-11-24');
+  // leere Felder am Ende werden weggelassen
+  const w = P.packExtractPoint({ id: 'node/7', lat: 1, lon: 2, tags: { amenity: 'drinking_water' } }, { type: 'water', label: 'Trinkwasser' });
+  assert.deepEqual(JSON.parse(JSON.stringify(w)), ['n7', 1, 2, 'water', 'Trinkwasser']);
+  assert.equal(P.unpackExtractPoint(w).name, '');
+  // ungültige Zeilen → null
+  for (const bad of [null, [], ['x7', 1, 2, 'water', 'T'], ['n7', 'a', 2, 'water', 'T'], ['n7', 1, 2, 'beer', 'T']])
+    assert.equal(P.unpackExtractPoint(bad), null);
+});
+test('Offline-Daten: Dedupe bevorzugt sie vor Vektor-Tiles, Quelle im Export', () => {
+  const a = { id: 'tile/1', type: 'shop', lat: 47, lon: 8, source: 'tiles', name: 'Coop' };
+  const b = { id: 'node/1', type: 'shop', lat: 47.0001, lon: 8, source: 'extract', name: 'Coop' };
+  const kept = P.dedupe([a, b], 60);
+  assert.equal(kept.length, 1); assert.equal(kept[0].source, 'extract');
+  assert.match(P.wptDesc({ hours: '?', distM: 5, source: 'extract', osmDate: '2026-11-24', type: 'shop' }, 'd'), /OSM \(Offline-Daten\), Stand 2026-11-24/);
+  assert.equal(P.sourceInfo('extract').tags, true); assert.equal(P.sourceInfo('tiles').tags, false);
+});
+
+test('Filter „nur offen“: nur geöffnete, Wasser nie gefiltert, aus = alles', () => {
+  const f = P.passesOpenFilter;
+  assert.equal(f({ type: 'food', openState: 'open' }, true), true);
+  assert.equal(f({ type: 'food', openState: 'closed' }, true), false);
+  assert.equal(f({ type: 'shop', openState: 'unknown' }, true), false);
+  assert.equal(f({ type: 'water', openState: 'unknown' }, true), true);
+  assert.equal(f({ type: 'fuel', openState: 'closed' }, false), true);
+});
+
 // Fixtures für manuelle Tests schreiben
 fs.mkdirSync(path.join(here, 'fixtures'), { recursive: true });
 fs.writeFileSync(path.join(here, 'fixtures', 'test-route.gpx'), gpx);

@@ -61,7 +61,8 @@
   input[type=number], input[type=date] { background: var(--bg); border: 1px solid var(--border); border-radius: 4px; padding: 3px 6px; }
   table.types { width: 100%; border-collapse: collapse; }
   table.types td { padding: 4px 2px; }
-  table.types td:last-child { text-align: right; white-space: nowrap; }
+  table.types td:nth-child(n+3) { text-align: right; white-space: nowrap; }
+  table.types td:nth-child(4) { padding-left: 8px; }
   table.types input[type=number] { width: 64px; }
   .dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 4px; vertical-align: middle; }
   button { background: var(--accent); color: #fff; border: 0; border-radius: 6px; padding: 7px 12px; cursor: pointer; }
@@ -77,6 +78,7 @@
   .chip.failed { background: var(--err); }
   .chip.retry { background: var(--warn-border); }
   .chip.tiles { background: #7b1fa2; }
+  .chip.local { background: #0f766e; }
   #log { max-height: 110px; overflow: auto; font: 12px/1.35 ui-monospace, monospace; color: var(--muted); white-space: pre-wrap; }
   .msg { padding: 8px 10px; border-radius: 6px; margin: 8px 0; border: 1px solid var(--warn-border); background: var(--warn-bg); }
   .msg.err { border-color: var(--err); }
@@ -88,6 +90,7 @@
   table.list th { position: sticky; top: 0; background: var(--panel); }
   table.list tr.sel { background: var(--row-sel); font-weight: 600; }
   table.list tr.manual td:first-child::after { content: " ✎"; color: var(--muted); }
+  table.list tr.filtered:not(.sel) td { color: var(--muted); }
   table.list tr:hover { outline: 1px solid var(--accent); cursor: pointer; }
   td.num, th.num { text-align: right; }
   .muted { color: var(--muted); }
@@ -120,22 +123,23 @@
     <section class="panel" id="settingsPanel">
       <h2>2. Einstellungen</h2>
       <table class="types">
-        <tr><th scope="col" aria-label="aktiv"></th><th scope="col" aria-label="Typ"></th><th scope="col" class="muted" style="text-align:right;font-weight:normal">max. Abstand</th></tr>
-        <tr><td><input type="checkbox" id="en_water" checked></td><td><label for="en_water"><span class="dot" style="background:var(--water)"></span>Wasser</label></td><td><input type="number" id="d_water" aria-label="max. Abstand Wasser (km)" min="1" max="500" step="1" value="15"> km</td></tr>
-        <tr><td><input type="checkbox" id="en_shop" checked></td><td><label for="en_shop"><span class="dot" style="background:var(--shop)"></span>Einkauf</label></td><td><input type="number" id="d_shop" aria-label="max. Abstand Einkauf (km)" min="1" max="500" step="1" value="30"> km</td></tr>
-        <tr><td><input type="checkbox" id="en_food" checked></td><td><label for="en_food"><span class="dot" style="background:var(--food)"></span>Restaurant / Café</label></td><td><input type="number" id="d_food" aria-label="max. Abstand Restaurant / Café (km)" min="1" max="500" step="1" value="40"> km</td></tr>
-        <tr><td><input type="checkbox" id="en_fuel" checked></td><td><label for="en_fuel"><span class="dot" style="background:var(--fuel)"></span>Tankstelle</label></td><td><input type="number" id="d_fuel" aria-label="max. Abstand Tankstelle (km)" min="1" max="500" step="1" value="40"> km</td></tr>
+        <tr><th scope="col" aria-label="aktiv"></th><th scope="col" aria-label="Typ"></th><th scope="col" class="muted" style="text-align:right;font-weight:normal">max. Abstand</th><th scope="col" class="muted" style="text-align:right;font-weight:normal;padding-left:8px" title="Nur Punkte, die laut Öffnungszeiten am Fahrtag geöffnet haben (Punkte ohne Öffnungszeiten werden nicht automatisch gewählt)">🕒 nur offen</th></tr>
+        <tr><td><input type="checkbox" id="en_water" checked></td><td><label for="en_water"><span class="dot" style="background:var(--water)"></span>Wasser</label></td><td><input type="number" id="d_water" aria-label="max. Abstand Wasser (km)" min="1" max="500" step="1" value="15"> km</td><td class="muted" title="Trinkwasser hat keine Öffnungszeiten">–</td></tr>
+        <tr><td><input type="checkbox" id="en_shop" checked></td><td><label for="en_shop"><span class="dot" style="background:var(--shop)"></span>Einkauf</label></td><td><input type="number" id="d_shop" aria-label="max. Abstand Einkauf (km)" min="1" max="500" step="1" value="30"> km</td><td><input type="checkbox" id="oh_shop" aria-label="nur geöffnete mit Öffnungszeiten am Fahrtag – Einkauf" title="Nur Punkte, die laut Öffnungszeiten am Fahrtag geöffnet haben"></td></tr>
+        <tr><td><input type="checkbox" id="en_food" checked></td><td><label for="en_food"><span class="dot" style="background:var(--food)"></span>Restaurant / Café</label></td><td><input type="number" id="d_food" aria-label="max. Abstand Restaurant / Café (km)" min="1" max="500" step="1" value="40"> km</td><td><input type="checkbox" id="oh_food" aria-label="nur geöffnete mit Öffnungszeiten am Fahrtag – Restaurant / Café" title="Nur Punkte, die laut Öffnungszeiten am Fahrtag geöffnet haben"></td></tr>
+        <tr><td><input type="checkbox" id="en_fuel" checked></td><td><label for="en_fuel"><span class="dot" style="background:var(--fuel)"></span>Tankstelle</label></td><td><input type="number" id="d_fuel" aria-label="max. Abstand Tankstelle (km)" min="1" max="500" step="1" value="40"> km</td><td><input type="checkbox" id="oh_fuel" aria-label="nur geöffnete mit Öffnungszeiten am Fahrtag – Tankstelle" title="Nur Punkte, die laut Öffnungszeiten am Fahrtag geöffnet haben"></td></tr>
       </table>
       <div class="row"><label for="offTrack">max. Entfernung vom Track</label><span><input type="number" id="offTrack" min="10" max="1000" step="10" value="300"> m</span></div>
       <div class="row"><label for="rideDate">Fahrtag</label><input type="date" id="rideDate"></div>
       <div class="row"><label><input type="checkbox" id="reverse"> Route umkehren</label></div>
       <div class="row"><label><input type="checkbox" id="allPoints"> Alle Punkte (ohne Abstandsregel)</label></div>
+      <div class="row"><label title="Vorberechneter OSM-Auszug (derzeit CH, LI, AT, DE, FR, IT), wöchentlich aktualisiert. Aus: immer live über Overpass."><input type="checkbox" id="useExtract" checked> Offline-Daten verwenden, wo verfügbar</label></div>
       <div class="btns">
         <button id="searchBtn" disabled>Versorgungspunkte suchen</button>
         <button id="cancelBtn" class="secondary hidden">Abbrechen</button>
       </div>
-      <p class="muted" style="font-size:12px;margin:8px 0 0">Hinweis: Für die Suche wird der Routenverlauf (vereinfacht, ±25 m)
-        an öffentliche Overpass-Server gesendet. Details unten auf der Seite.</p>
+      <p class="muted" style="font-size:12px;margin:8px 0 0">Hinweis: Wo Offline-Daten vorliegen (derzeit CH, LI, AT, DE, FR, IT), werden nur grobe
+        Kartenzellen geladen. Sonst wird der Routenverlauf (vereinfacht, ±25 m) an öffentliche Overpass-Server gesendet. Details unten auf der Seite.</p>
     </section>
 
     <!-- Export -->
@@ -180,10 +184,12 @@
 
 <footer class="muted" style="padding: 0 16px 24px; font-size: 12px;">
   Daten &copy; <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a>-Mitwirkende (ODbL),
-  abgefragt über öffentliche, ehrenamtlich betriebene Overpass-Server – bitte sparsam suchen.
+  aus vorberechneten <a href="https://github.com/kloeggaa/pitstopplanner-data" target="_blank" rel="noopener">Offline-Daten</a> (derzeit Schweiz, Liechtenstein, Österreich, Deutschland, Frankreich, Italien; wöchentlich aktualisiert)
+  oder abgefragt über öffentliche, ehrenamtlich betriebene Overpass-Server – bitte sparsam suchen.
   Fallback-Daten und Karte: <a href="https://openfreemap.org" target="_blank" rel="noopener">OpenFreeMap</a>.<br>
   <b>Datenschutz:</b> Die GPX-Datei selbst wird nicht hochgeladen, Auswahl und Export laufen lokal im Browser.
-  Für die Suche wird aber der <b>Routenverlauf</b> (vereinfacht auf ca. 25 m genau, abschnittsweise) an öffentliche Overpass-Server
+  Wo Offline-Daten vorliegen, werden nur Kartenzellen von ca. 11 × 8 km von GitHub Pages geladen (kein Routenverlauf).
+  Sonst wird für die Suche der <b>Routenverlauf</b> (vereinfacht auf ca. 25 m genau, abschnittsweise) an öffentliche Overpass-Server
   gesendet: overpass-api.de (Deutschland), bei Störungen ersatzweise overpass.private.coffee und maps.mail.ru (VK, Russland).
   Beginnt die Route an deiner Wohnung, ist diese daraus ablesbar – ggf. Start/Ende vorher kürzen.
   Beim Fallback werden Kartenkacheln entlang der Route von OpenFreeMap geladen, die Kartenanzeige lädt Kacheln
@@ -598,6 +604,55 @@
     return [...out.values()];
   }
 
+  /* ---------- Offline-Daten (vorberechneter POI-Auszug, siehe pitstopplanner-data) ----------
+   * Gitter aus EXTRACT_PER_DEG × EXTRACT_PER_DEG Zellen je Grad, Schlüssel "latIdx_lonIdx".
+   * Je Zelle eine Datei {p:[Zeile…]}, Zeile = [id, lat, lon, type, label, name, opening_hours, addr:country]
+   * (leere Felder am Ende weggelassen, id kompakt: n123 / w123 / r123).
+   * Die Klassifizierung (classifyOsm) läuft schon beim Erzeugen – mit genau diesem Code.
+   */
+  const EXTRACT_FORMAT = 1;
+  const EXTRACT_PER_DEG = 10;
+  const OSM_KIND = { node: 'n', way: 'w', relation: 'r' };
+  const OSM_KIND_LONG = { n: 'node', w: 'way', r: 'relation' };
+  function gridKey(lat, lon) {
+    return Math.floor(lat * EXTRACT_PER_DEG) + '_' + Math.floor(lon * EXTRACT_PER_DEG);
+  }
+  /** alle Zellen, die eine Bounding Box {s,w,n,e} berührt */
+  function gridKeysForBbox(b) {
+    const D = EXTRACT_PER_DEG, out = [];
+    for (let y = Math.floor(b.s * D); y <= Math.floor(b.n * D); y++)
+      for (let x = Math.floor(b.w * D); x <= Math.floor(b.e * D); x++) out.push(y + '_' + x);
+    return out;
+  }
+  /** Overpass-artiges Element {id:'node/1', lat, lon, tags} + Klassifizierung → kompakte Zeile */
+  function packExtractPoint(el, cls) {
+    const [kind, num] = el.id.split('/');
+    const t = el.tags || {};
+    const row = [OSM_KIND[kind] + num, +el.lat.toFixed(5), +el.lon.toFixed(5), cls.type, cls.label,
+      osmName(t), t.opening_hours || '', t['addr:country'] || ''];
+    while (row.length > 5 && row[row.length - 1] === '') row.pop();
+    return row;
+  }
+  /** kompakte Zeile → Punkt wie aus Overpass (source 'extract'); null bei ungültiger Zeile */
+  function unpackExtractPoint(row, osmDate) {
+    if (!Array.isArray(row) || row.length < 5) return null;
+    const [sid, lat, lon, type, label, name, oh, cc] = row;
+    const kind = OSM_KIND_LONG[String(sid)[0]];
+    if (!kind || !TYPES[type] || !Number.isFinite(lat) || !Number.isFinite(lon)) return null;
+    const tags = {};
+    if (oh) tags.opening_hours = String(oh);
+    if (cc) tags['addr:country'] = String(cc);
+    return { id: kind + '/' + String(sid).slice(1), lat, lon, tags, source: 'extract', type, label: String(label),
+      name: String(name || ''), osmDate: osmDate || '' };
+  }
+  /** Quellen: Anzeige-Text und ob OSM-Tags (Öffnungszeiten) vorhanden sind */
+  const SOURCES = {
+    overpass: { short: 'Overpass', long: 'OSM (Overpass)', tags: true },
+    extract:  { short: 'Offline-Daten', long: 'OSM (Offline-Daten)', tags: true },
+    tiles:    { short: 'Vektor-Tiles', long: 'OSM (Vektor-Tiles)', tags: false },
+  };
+  const sourceInfo = s => SOURCES[s] || SOURCES.tiles;
+
   /* ---------- Deduplizierung ---------- */
   const normName = n => String(n || '').toLowerCase().replace(/[^a-z0-9äöüß]+/g, '');
   /**
@@ -608,7 +663,8 @@
    * Erwartet Objekte {type, lat, lon, source, name}.
    */
   function dedupe(points, radiusM = 60) {
-    const sorted = points.slice().sort((a, b) => (a.source === 'overpass' ? 0 : 1) - (b.source === 'overpass' ? 0 : 1));
+    const rank = p => (sourceInfo(p.source).tags ? 0 : 1);   // Overpass / Offline-Daten vor Vektor-Tiles
+    const sorted = points.slice().sort((a, b) => rank(a) - rank(b));
     const kept = [];
     const cell = 0.001, grid = new Map(); // ~110 m Zellen
     const key = (x, y) => x + ',' + y;
@@ -656,6 +712,12 @@
       return { text: '?', state: 'unknown' };
     }
   }
+
+  /**
+   * Filter „nur geöffnet“ (je Typ, nicht für Wasser): nur Kandidaten, die laut Öffnungszeiten am Fahrtag
+   * geöffnet haben (openState 'open'). Unbekannte und geschlossene fallen aus der automatischen Auswahl.
+   */
+  const passesOpenFilter = (c, onlyOpen) => !onlyOpen || c.type === 'water' || c.openState === 'open';
 
   /* ---------- Auswahl-Algorithmus ---------- */
   const OPEN_RANK = { open: 2, unknown: 1, closed: 0 };
@@ -876,7 +938,7 @@
   /** Beschreibung für <desc> */
   function wptDesc(p, dateLabel) {
     let d = 'Öffnungszeiten ' + dateLabel + ': ' + p.hours + '; Abstand zum Track: ' + Math.round(p.distM) + ' m; Quelle: '
-      + (p.source === 'overpass' ? 'OSM (Overpass)' : 'OSM (Vektor-Tiles)');
+      + sourceInfo(p.source).long + (p.source === 'extract' && p.osmDate ? ', Stand ' + p.osmDate : '');
     if (p.type === 'water') d += '; im Winter evtl. abgestellt';
     return d;
   }
@@ -936,6 +998,7 @@
 
   root.PSP = {
     TYPES, TYPE_ORDER, haversine, cumulativeKm, totalAscent, buildTrack, buildTrackIndex, projectToTrack,
+    passesOpenFilter, EXTRACT_FORMAT, EXTRACT_PER_DEG, gridKey, gridKeysForBbox, packExtractPoint, unpackExtractPoint, SOURCES, sourceInfo,
     bboxOf, splitSegments, simplifyPath, buildOverpassQuery, OVERPASS_FILTERS, classifyOsm, osmName, classifyTilePoi, decodeMvtLayer, lonLatToTile,
     tilePointToLonLat, tilesForBboxes, dedupe, hoursForDay, selectPoints, selectPointsLazy, orientSegments, longestGap, decodeFile,
     parseGpxDoc, checkGpxText, reverseBlocks, stripTimes, reverseGpxText, removeWpts, forceUtf8Declaration, xmlEscape,
@@ -978,12 +1041,22 @@
   const LIMITS = { offTrack: [10, 1000], D: [1, 500] };   // Eingabegrenzen (schützt den kostenlosen Dienst)
   const AUTO_FETCH_CONFIRM = 3;        // mehr fehlende Abschnitte → vor automatischem Nachladen fragen
   const TILEJSON_URL = 'https://tiles.openfreemap.org/planet';
+  // vorberechnete POI-Auszüge (Repo kloeggaa/pitstopplanner-data); nicht abgedeckte Gebiete → Overpass
+  // Entwicklung: ?extract=<URL> (nur auf localhost) nutzt einen lokal erzeugten Auszug
+  const EXTRACT_BASE = (() => {
+    const def = 'https://kloeggaa.github.io/pitstopplanner-data/poi/v' + P.EXTRACT_FORMAT + '/';
+    try {
+      const q = new URLSearchParams(location.search).get('extract');
+      if (q && /^(localhost|127\.0\.0\.1)$/.test(location.hostname)) return new URL(q, location.href).href.replace(/\/?$/, '/');
+    } catch (e) { /* ignorieren */ }
+    return def;
+  })();
   const STORAGE_KEY = 'pitstopplanner-settings-v1';
 
   /* ---------- Zustand ---------- */
   const state = {
     fileName: null, text: null, encoding: 'utf-8', origPts: null, track: null,
-    raw: [],               // klassifizierte Rohpunkte aus Overpass / Tiles (nach Dedupe)
+    raw: [],               // klassifizierte Rohpunkte aus Offline-Daten / Overpass / Tiles (nach Dedupe)
     seg: null,             // Abschnitts-Cache (siehe ensureSegCache)
     searched: false,       // wurde für diese Datei schon gesucht?
     cands: [],             // Kandidaten innerhalb der Track-Entfernung (mit km, Abstand, Zeiten)
@@ -993,6 +1066,8 @@
     busy: false, cancel: false, controller: null,
     cooldownUntil: 0,      // bis wann Overpass ganz pausiert (alle Server gesperrt / Schutzschalter), gilt über Läufe hinweg
     epDownUntil: OVERPASS_ENDPOINTS.map(() => 0),   // je Server: pausiert bis (nach 429 / Netzwerkfehler), gilt über Läufe hinweg
+    // Offline-Daten: index = undefined (noch nicht geladen) | null (nicht verfügbar) | Index-Objekt; tiles: Zelle → Punkte
+    extract: { index: undefined, loading: null, date: '', tiles: new Map() },
   };
 
   /* ---------- Einstellungen ---------- */
@@ -1006,18 +1081,21 @@
     const off = clamp(Math.round(+$('offTrack').value || 300), LIMITS.offTrack);
     if (String(off) !== $('offTrack').value) $('offTrack').value = off;
     const s = { types: {}, offTrack: off, date: $('rideDate').value || todayStr(),
-      reverse: $('reverse').checked, allPoints: $('allPoints').checked };
+      reverse: $('reverse').checked, allPoints: $('allPoints').checked, useExtract: $('useExtract').checked };
     for (const t of P.TYPE_ORDER) {
       const D = clamp(+$('d_' + t).value || P.TYPES[t].defaultD, LIMITS.D);
       if (String(D) !== $('d_' + t).value) $('d_' + t).value = D;
-      s.types[t] = { enabled: $('en_' + t).checked, D };
+      s.types[t] = { enabled: $('en_' + t).checked, D, onlyOpen: !!($('oh_' + t) && $('oh_' + t).checked) };
     }
     return s;
   }
   function writeSettings(s) {
     $('offTrack').value = s.offTrack; $('rideDate').value = s.date;
-    $('reverse').checked = s.reverse; $('allPoints').checked = s.allPoints;
-    for (const t of P.TYPE_ORDER) { $('en_' + t).checked = s.types[t].enabled; $('d_' + t).value = s.types[t].D; }
+    $('reverse').checked = s.reverse; $('allPoints').checked = s.allPoints; $('useExtract').checked = s.useExtract;
+    for (const t of P.TYPE_ORDER) {
+      $('en_' + t).checked = s.types[t].enabled; $('d_' + t).value = s.types[t].D;
+      if ($('oh_' + t)) $('oh_' + t).checked = !!s.types[t].onlyOpen;
+    }
   }
   function saveSettings(s) {
     try { const c = JSON.parse(JSON.stringify(s)); delete c.date; delete c.reverse; c.removeWpts = $('removeWpts').checked;
@@ -1031,7 +1109,8 @@
       const s = readSettings();
       if (c.offTrack) s.offTrack = c.offTrack;
       s.allPoints = !!c.allPoints;
-      for (const t of P.TYPE_ORDER) if (c.types && c.types[t]) s.types[t] = { enabled: !!c.types[t].enabled, D: +c.types[t].D || s.types[t].D };
+      s.useExtract = c.useExtract !== false;     // Standard: an
+      for (const t of P.TYPE_ORDER) if (c.types && c.types[t]) s.types[t] = { enabled: !!c.types[t].enabled, D: +c.types[t].D || s.types[t].D, onlyOpen: t !== 'water' && !!c.types[t].onlyOpen };
       writeSettings(s);
       $('removeWpts').checked = !!c.removeWpts;
     } catch (e) { /* ignorieren */ }
@@ -1080,7 +1159,7 @@
   const segRenderer = L.canvas({ pane: 'segPane' });
   const segLayer = L.layerGroup().addTo(map);
   let segLines = [];
-  const SEG_COLORS = { running: '#3b82f6', done: '#22c55e', failed: '#ef4444', retry: '#f59e0b', tiles: '#a855f7' };
+  const SEG_COLORS = { running: '#3b82f6', done: '#22c55e', failed: '#ef4444', retry: '#f59e0b', tiles: '#a855f7', local: '#0d9488' };
   const markers = new Map(); // id → circleMarker
 
   function drawTrack() {
@@ -1263,6 +1342,7 @@
     const fetched = [...state.seg.data.values()].filter(d => d.size).length;
     let txt = 'Abschnitte: ' + fetched + '/' + N + ' abgefragt';
     const parts = [];
+    if (n('local')) parts.push(n('local') + ' aus Offline-Daten');
     if (n('tiles')) parts.push(n('tiles') + ' über Vektor-Tiles');
     if (n('failed')) parts.push(n('failed') + ' fehlgeschlagen');
     if (!state.busy && fetched < N) parts.push((N - fetched) + ' nicht benötigt');
@@ -1291,14 +1371,88 @@
   const cancellableSleep = async ms => { for (let w = 0; w < ms / 100 && !state.cancel; w++) await sleep(100); };
   let epStart = 0; // zuletzt erfolgreicher Endpunkt wird zuerst probiert
 
+  /* ---------- Offline-Daten (statische Gitter-Dateien, kein Routenverlauf wird gesendet) ---------- */
+  const extractSignal = () => (typeof AbortSignal !== 'undefined' && AbortSignal.timeout ? AbortSignal.timeout(20000) : undefined);
+  /** Index einmal je Sitzung laden; null = nicht verfügbar (dann Overpass) */
+  async function extractIndex() {
+    const X = state.extract;
+    if (X.index !== undefined) return X.index;
+    if (!X.loading) X.loading = (async () => {
+      try {
+        const res = await fetch(EXTRACT_BASE + 'index.json', { cache: 'no-cache', signal: extractSignal() });
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        const idx = await res.json();
+        if (!idx || idx.format !== P.EXTRACT_FORMAT || idx.perDeg !== P.EXTRACT_PER_DEG || !idx.tiles || typeof idx.tiles !== 'object')
+          throw new Error('unbekanntes Format');
+        const dates = (idx.sources || []).map(s => String(s.osmTimestamp || '').slice(0, 10)).filter(d => /^\d{4}-\d\d-\d\d$/.test(d)).sort();
+        X.date = dates[0] || String(idx.built || '').slice(0, 10);
+        log('Offline-Daten verfügbar: ' + (idx.sources || []).map(s => String(s.id).toUpperCase()).join(', ')
+          + ' (OSM-Stand ' + X.date + ', ' + Object.keys(idx.tiles).length + ' Zellen) – übrige Gebiete über Overpass');
+        return idx;
+      } catch (e) {
+        log('Offline-Daten nicht verfügbar (' + e.message + ') – Suche über Overpass');
+        return null;
+      } finally { X.loading = null; }
+    })();
+    X.index = await X.loading;
+    return X.index;
+  }
+  /** deckt der bereits geladene Offline-Index diese Bounding Box vollständig ab? (synchron, ohne Netz) */
+  function extractCovers(bbox) {
+    const idx = state.applied.useExtract && state.extract.index;
+    return !!idx && P.gridKeysForBbox(bbox).every(k => Object.prototype.hasOwnProperty.call(idx.tiles, k));
+  }
   /**
-   * Einen Abschnitt abfragen: Overpass (Endpunkt-Failover, bis zu 4 Wiederholungsrunden mit Backoff).
+   * Punkte eines Abschnitts aus den Offline-Daten (alle Typen) oder null, wenn seine Bounding Box nicht
+   * VOLLSTÄNDIG abgedeckt ist (z. B. Grenznähe, anderes Land). Wirft bei Netzwerk-/Formatfehlern.
+   */
+  async function fetchExtract(o) {
+    const idx = await extractIndex();
+    if (!idx) return null;
+    const b = state.seg.list[o].bbox;
+    const keys = P.gridKeysForBbox(b);
+    if (!keys.every(k => Object.prototype.hasOwnProperty.call(idx.tiles, k))) return null;
+    const out = [];
+    for (const k of keys) {
+      if (!idx.tiles[k]) continue;                    // abgedeckt, aber leer
+      let pts = state.extract.tiles.get(k);
+      if (!pts) {
+        const res = await fetch(EXTRACT_BASE + 't/' + k + '.json?v=' + encodeURIComponent(idx.built || ''), { signal: extractSignal() });
+        if (!res.ok) throw new Error('Zelle ' + k + ': HTTP ' + res.status);
+        const data = await res.json();
+        if (!data || !Array.isArray(data.p)) throw new Error('Zelle ' + k + ': unbekanntes Format');
+        pts = data.p.map(r => P.unpackExtractPoint(r, state.extract.date)).filter(Boolean);
+        state.extract.tiles.set(k, pts);
+      }
+      for (const p of pts) if (p.lat >= b.s && p.lat <= b.n && p.lon >= b.w && p.lon <= b.e) out.push(p);
+    }
+    return out;
+  }
+
+  /**
+   * Einen Abschnitt abfragen: zuerst Offline-Daten (falls aktiviert und das Gebiet vollständig abgedeckt ist),
+   * sonst Overpass (Endpunkt-Failover, bis zu 4 Wiederholungsrunden mit Backoff).
    * Bei 429 / "Failed to fetch" wird nur dieser Server für COOLDOWN_S pausiert und der nächste probiert;
    * erst wenn alle Server pausiert sind (oder der Schutzschalter greift) → Vektor-Tiles.
    */
   async function fetchSegment(o, types) {
     const seg = state.seg.list[o];
     const label = 'Abschnitt ' + ((state.applied.reverse ? state.seg.list.length - 1 - o : o) + 1) + ' [' + types.map(t => TYPE_SHORT[t]).join(', ') + ']';
+    if (state.applied.useExtract) {
+      try {
+        const pts = await fetchExtract(o);
+        if (pts) {
+          // Offline-Daten enthalten alle Typen → Abschnitt gleich für alle Typen erledigt
+          storeSegment(o, P.TYPE_ORDER, pts);
+          setStatus(o, 'local', 'Offline-Daten (OSM-Stand ' + state.extract.date + '), ' + pts.length + ' Punkte');
+          log(label + ': aus Offline-Daten (' + pts.length + ' Punkte)');
+          return;
+        }
+      } catch (e) {
+        log(label + ': Offline-Daten fehlgeschlagen (' + e.message + ') – Overpass wird verwendet');
+      }
+      if (state.cancel) return;
+    }
     const q = overpassQuery(o, types);
     const doneTitle = extra => { const d = state.seg.data.get(o); return 'abgefragt: ' + [...d.keys()].map(t => TYPE_SHORT[t]).join(', ') + ' – ' + extra; };
     const epDown = ei => Date.now() < state.epDownUntil[ei];
@@ -1381,6 +1535,7 @@
     $('searchBtn').disabled = true; $('cancelBtn').classList.remove('hidden');
     $('progress').classList.remove('hidden');
     if (manual) { state.seg = null; state.overrides.clear(); $('log').textContent = ''; }
+    if (manual && state.extract.index === null) state.extract.index = undefined;   // Offline-Index erneut versuchen
     state.searched = true;
     try {
       ensureSegCache();
@@ -1469,9 +1624,11 @@
       if (!proj) continue;
       let h;
       if (r.type === 'water') h = { text: '–', state: 'open' };
-      else if (r.source !== 'overpass') h = { text: '?', state: 'unknown' };
+      else if (!P.sourceInfo(r.source).tags) h = { text: '?', state: 'unknown' };
       else h = P.hoursForDay(OH, r.tags.opening_hours, r.lat, r.lon, day, r.tags['addr:country']);
-      state.cands.push({ ...r, km: proj.km, distM: proj.distM, hours: h.text, openState: h.state, hasName: !!r.name });
+      // ohne opening_hours.js wäre alles „unbekannt“ → Filter wirkungslos schalten statt alles auszublenden
+      const filtered = !!OH && !P.passesOpenFilter({ type: r.type, openState: h.state }, s.types[r.type].onlyOpen);
+      state.cands.push({ ...r, km: proj.km, distM: proj.distM, hours: h.text, openState: h.state, hasName: !!r.name, filtered });
     }
     state.cands.sort((a, b) => a.km - b.km);
     state.base = new Set();
@@ -1479,7 +1636,8 @@
     for (const t of P.TYPE_ORDER) {
       if (!s.types[t].enabled) continue;
       const fetchedCur = k => isSettled(segs[k].orig, t);
-      const c = state.cands.filter(x => x.type === t);
+      // ausgefilterte Punkte bleiben als graue Kandidaten sichtbar (manuell wählbar), aber nicht automatisch
+      const c = state.cands.filter(x => x.type === t && !x.filtered);
       if (s.allPoints) {                         // alle Punkte → ganze Route nötig
         c.forEach(x => state.base.add(x.id));
         const k = segs.findIndex((sg, i) => !fetchedCur(i));
@@ -1505,7 +1663,8 @@
       ? ' · <a href="https://www.openstreetmap.org/' + esc(c.id) + '" target="_blank" rel="noopener">OSM</a>' : '';
     return '<b>' + esc(c.name || c.label) + '</b><br>' + esc(c.label) + ' (' + P.TYPES[c.type].name + ')<br>'
       + 'km ' + c.km.toFixed(1).replace('.', ',') + ' · ' + Math.round(c.distM) + ' m vom Track<br>'
-      + 'Öffnungszeiten: ' + esc(c.hours) + '<br>Quelle: ' + (c.source === 'overpass' ? 'Overpass' : 'Vektor-Tiles') + osm
+      + 'Öffnungszeiten: ' + esc(c.hours) + (c.filtered ? ' <i>(Filter „nur offen“: nicht automatisch gewählt)</i>' : '')
+      + '<br>Quelle: ' + P.sourceInfo(c.source).short + osm
       + '<div class="pop-state">' + (isSelected(c) ? '✓ im GPX-Export' : 'nicht im Export') + '</div>'
       + '<button class="pop-toggle' + (isSelected(c) ? ' secondary' : '') + '" data-id="' + esc(c.id) + '">'
       + (isSelected(c) ? 'Aus Export entfernen' : 'Für Export übernehmen') + '</button>';
@@ -1538,24 +1697,33 @@
     for (const c of state.cands) {
       const sel = isSelected(c);
       if (only && !sel) continue;
-      rows.push('<tr data-id="' + esc(c.id) + '" class="' + (sel ? 'sel' : '') + (state.overrides.has(c.id) ? ' manual' : '') + '">'
+      rows.push('<tr data-id="' + esc(c.id) + '" class="' + (sel ? 'sel' : '') + (state.overrides.has(c.id) ? ' manual' : '') + (c.filtered ? ' filtered' : '') + '">'
         + '<td class="num">' + c.km.toFixed(1).replace('.', ',') + '</td>'
         + '<td><span class="dot" style="background:' + P.TYPES[c.type].color + '"></span>' + esc(c.label) + '</td>'
         + '<td class="name">' + (c.name ? esc(c.name) : '<span class="muted">' + esc(c.label) + '</span>') + '</td>'
-        + '<td>' + esc(c.hours) + '</td>'
+        + '<td' + (c.filtered ? ' title="vom Filter „nur offen“ nicht automatisch gewählt"' : '') + '>' + esc(c.hours) + (c.filtered ? ' <span class="muted">(gefiltert)</span>' : '') + '</td>'
         + '<td class="num">' + Math.round(c.distM) + '</td>'
-        + '<td>' + (c.source === 'overpass' ? 'Overpass' : 'Vektor-Tiles') + '</td>'
+        + '<td>' + P.sourceInfo(c.source).short + '</td>'
         + '<td><input type="checkbox" ' + (sel ? 'checked' : '') + ' aria-label="übernehmen"></td></tr>');
     }
     $('tbody').innerHTML = rows.join('') || '<tr><td colspan="7" class="muted">Keine Punkte gefunden.</td></tr>';
     const n = selectedPoints().length;
+    const nf = state.cands.filter(c => c.filtered).length;
     $('countInfo').textContent = state.cands.length + ' Kandidaten, ' + n + ' ausgewählt'
-      + (state.overrides.size ? ' (' + state.overrides.size + ' manuell geändert)' : '');
+      + (state.overrides.size ? ' (' + state.overrides.size + ' manuell geändert)' : '')
+      + (nf ? ' · ' + nf + ' wegen „nur offen“ nicht automatisch gewählt' : '');
   }
 
   function renderWarnings() {
     const s = state.applied, out = [];
-    if (!window.opening_hours) out.push('<div class="msg err">opening_hours.js konnte nicht geladen werden – Öffnungszeiten werden als „?“ angezeigt.</div>');
+    const ohTypes = P.TYPE_ORDER.filter(t => t !== 'water' && s.types[t].enabled && s.types[t].onlyOpen);
+    if (!window.opening_hours) out.push('<div class="msg err">opening_hours.js konnte nicht geladen werden – Öffnungszeiten werden als „?“ angezeigt.'
+      + (ohTypes.length ? ' Der Filter „nur offen“ ist deshalb abgeschaltet.' : '') + '</div>');
+    if (window.opening_hours && ohTypes.length && state.seg) {
+      const nTiles = state.seg.status.filter(st => st.cls === 'tiles').length;
+      if (nTiles) out.push('<div class="msg">' + nTiles + ' Abschnitt(e) stammen aus Vektor-Tiles ohne Öffnungszeiten – dort wählt der Filter „nur offen“ ('
+        + ohTypes.map(t => P.TYPES[t].name).join(', ') + ') keine Punkte automatisch aus.</div>');
+    }
     if (state.seg && failedCount())
       out.push('<div class="msg err">' + failedCount() + ' Abfrage(n) fehlgeschlagen (Overpass und Vektor-Tiles) – die Auswahl ist dort unvollständig. '
         + 'Später erneut „Versorgungspunkte suchen“.</div>');
@@ -1590,8 +1758,10 @@
       tr.classList.toggle('manual', state.overrides.has(c.id));
       tr.querySelector('input[type=checkbox]').checked = want;
       const n = selectedPoints().length;
+      const nf = state.cands.filter(x => x.filtered).length;
       $('countInfo').textContent = state.cands.length + ' Kandidaten, ' + n + ' ausgewählt'
-        + (state.overrides.size ? ' (' + state.overrides.size + ' manuell geändert)' : '');
+        + (state.overrides.size ? ' (' + state.overrides.size + ' manuell geändert)' : '')
+        + (nf ? ' · ' + nf + ' wegen „nur offen“ nicht automatisch gewählt' : '');
     } else {
       renderTable(); // Zeile fehlt (Filter „nur ausgewählte“) → Tabelle neu aufbauen
     }
@@ -1639,10 +1809,13 @@
     // fehlgeschlagene Abschnitte bei jeder Änderung erneut versuchen (Overpass respektiert dabei den Cooldown)
     if (!needs.length && !marginTooSmall && !failedCount()) return;
     // Wie viele Abschnitte fehlen mindestens? (bei „Alle Punkte“ exakt, sonst nach unten geschätzt)
-    const N = state.seg.list.length;
-    let missing = marginTooSmall ? N : 0;
-    if (!marginTooSmall && s.allPoints)
-      missing = state.seg.list.filter((sg, o) => P.TYPE_ORDER.some(t => s.types[t].enabled && !isFetched(o, t))).length;
+    // Abschnitte, die die Offline-Daten abdecken, belasten Overpass nicht → nicht mitzählen
+    let missing = 0;
+    if (marginTooSmall)
+      missing = P.splitSegments(state.origTrack, SEGMENT_KM, s.offTrack + EXTRA_MARGIN_M).filter(sg => !extractCovers(sg.bbox)).length;
+    else if (s.allPoints)
+      missing = state.seg.list.filter((sg, o) => !extractCovers(sg.bbox)
+        && P.TYPE_ORDER.some(t => s.types[t].enabled && !isFetched(o, t))).length;
     if (missing > AUTO_FETCH_CONFIRM && !confirm('Für diese Einstellung müssen bis zu ' + missing + ' Abschnitte von den öffentlichen '
         + 'Overpass-Servern nachgeladen werden. Jetzt laden?\n\n(Abbrechen: Auswahl bleibt unvollständig, später über „Versorgungspunkte suchen“ laden.)')) {
       log('Nachladen abgelehnt – Auswahl beruht nur auf bereits geladenen Abschnitten.');
@@ -1659,7 +1832,7 @@
   /* ---------- Export ---------- */
   function currentExportPoints() {
     return selectedPoints().map(c => ({ lat: c.lat, lon: c.lon, km: c.km, distM: c.distM, name: c.name,
-      label: c.label, type: c.type, hours: c.hours, source: c.source }));
+      label: c.label, type: c.type, hours: c.hours, source: c.source, osmDate: c.osmDate }));
   }
   /** GPX-Exporttext aus aktuellem Zustand */
   function exportText() {

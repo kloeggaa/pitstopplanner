@@ -108,6 +108,7 @@ function sampleFor(P, pts) {
 /* ---------- End-to-End: echte App im iframe, Overpass gemockt ---------- */
 async function e2e(F) {
   const frame = document.createElement('iframe');
+  clearAppSettings();                 // App startet mit Standard-Einstellungen
   frame.src = '../index.html';
   document.body.appendChild(frame);
   await new Promise(r => frame.onload = r);
@@ -135,6 +136,7 @@ async function e2e(F) {
       if (mode === 'netdown') throw new TypeError('Failed to fetch');
       return new Response(JSON.stringify({ elements: F.mockOverpassElements() }), { status: 200 });
     }
+    if (url.includes('pitstopplanner-data')) return new Response('not found', { status: 404 });   // Offline-Daten: hier nicht verfügbar
     if (mode === 'alldown' && url.includes('/mock/')) return new Response('err', { status: 500 });
     if ((mode === 'ratelimit' || mode === 'netdown' || mode === 'down' || mode === 'alldown') && url.includes('openfreemap')) {
       if (url.endsWith('/planet')) return new Response(JSON.stringify({ tiles: ['https://tiles.openfreemap.org/mock/{z}/{x}/{y}.pbf'] }));
@@ -330,6 +332,141 @@ async function e2e(F) {
     && /Abgebrochen/.test(doc.getElementById('log').textContent));
 }
 
+/* ---------- End-to-End: Offline-Daten (Index + Zellen gemockt, aus denselben Fixture-Elementen) ---------- */
+async function e2eExtract(F) {
+  const frame = document.createElement('iframe');
+  clearAppSettings();                 // App startet mit Standard-Einstellungen
+  frame.src = '../index.html';
+  document.body.appendChild(frame);
+  await new Promise(r => frame.onload = r);
+  const w = frame.contentWindow, doc = w.document, P = w.PSP;
+  if (!w.PSP_APP) { check('Offline: App im iframe geladen', false); return; }
+  // Zellen aus den Overpass-Mock-Elementen bauen – genau wie tools/build.mjs (classifyOsm + packExtractPoint)
+  const cells = new Map();
+  for (const el of F.mockOverpassElements()) {
+    const lat = el.lat ?? el.center.lat, lon = el.lon ?? el.center.lon;
+    const cls = P.classifyOsm(el.tags);
+    if (!cls) continue;
+    const k = P.gridKey(lat, lon);
+    if (!cells.has(k)) cells.set(k, []);
+    cells.get(k).push(P.packExtractPoint({ id: el.type + '/' + el.id, lat, lon, tags: el.tags }, cls));
+  }
+  const allKeys = P.gridKeysForBbox({ s: 47.9, n: 48.1, w: 10.9, e: 11.4 });
+  const makeIndex = keys => ({ format: P.EXTRACT_FORMAT, perDeg: P.EXTRACT_PER_DEG, built: '2026-11-25T00:00:00Z',
+    sources: [{ id: 'test', osmTimestamp: '2026-11-24T21:21:23Z' }],
+    tiles: Object.fromEntries(keys.map(k => [k, (cells.get(k) || []).length])) });
+  let index = makeIndex(allKeys), indexStatus = 200;
+  const calls = [];
+  const realFetch = w.fetch.bind(w);
+  w.fetch = async (url, opts) => {
+    url = String(url); calls.push(url);
+    if (url.includes('interpreter')) return new Response(JSON.stringify({ elements: F.mockOverpassElements() }), { status: 200 });
+    if (url.includes('pitstopplanner-data')) {
+      if (url.endsWith('/index.json')) return indexStatus === 200 ? new Response(JSON.stringify(index)) : new Response('x', { status: indexStatus });
+      const m = /\/t\/(-?\d+_-?\d+)\.json/.exec(url);
+      if (m && cells.has(m[1])) return new Response(JSON.stringify({ p: cells.get(m[1]) }));
+      return new Response('not found', { status: 404 });
+    }
+    return realFetch(url, opts);
+  };
+  const reset = () => { w.PSP_APP.state.extract.index = undefined; w.PSP_APP.state.extract.tiles.clear(); calls.length = 0; };
+  const nIp = () => calls.filter(u => u.includes('interpreter')).length;
+  const chips = () => [...doc.querySelectorAll('#segChips .chip')].map(c => c.className.replace('chip', '').trim());
+  const sel = () => w.PSP_APP.currentExportPoints().map(p => p.type + '@' + Math.round(p.km)).sort().join(',');
+  const EXPECTED = 'food@10,food@15,fuel@11,shop@17,shop@4,shop@9,water@15';
+
+  check('Offline: Checkbox „Offline-Daten verwenden“ standardmäßig an', doc.getElementById('useExtract').checked);
+  // vorherige Tests haben Einstellungen gespeichert → alles explizit setzen
+  for (const t of ['water', 'shop', 'food', 'fuel']) doc.getElementById('en_' + t).checked = true;
+  doc.getElementById('d_water').value = 15; doc.getElementById('offTrack').value = 300;
+  doc.getElementById('reverse').checked = false; doc.getElementById('allPoints').checked = false;
+  doc.getElementById('rideDate').value = '2026-11-23';
+  doc.getElementById('d_shop').value = 6; doc.getElementById('d_food').value = 8; doc.getElementById('d_fuel').value = 8;
+  w.PSP_APP.onSettingsChanged();
+  await w.PSP_APP.loadFile(new File([F.makeTestGpx()], 'test-route.gpx'));
+
+  // A: Route vollständig abgedeckt → keine einzige Overpass-Anfrage, gleiche Auswahl wie mit Overpass
+  reset();
+  await w.PSP_APP.search();
+  const st = w.PSP_APP.state;
+  check('Offline: vollständig abgedeckt → keine Overpass-Anfrage', nIp() === 0, nIp() + ' Anfragen');
+  check('Offline: alle Abschnitte „lokal“', chips().length === 2 && chips().every(c => c === 'local'), chips().join(','));
+  check('Offline: Kandidaten = 9 (wie Overpass)', st.cands.length === 9, st.cands.length);
+  check('Offline: Auswahl wie mit Overpass', sel() === EXPECTED, sel());
+  check('Offline: Öffnungszeiten ausgewertet (Café Sonne am Montag „zu“)', st.cands.some(c => c.name === 'Café Sonne' && c.hours === 'zu'));
+  check('Offline: Index einmal, jede Zelle höchstens einmal geladen',
+    calls.filter(u => u.endsWith('/index.json')).length === 1 && new Set(calls.filter(u => u.includes('/t/'))).size === calls.filter(u => u.includes('/t/')).length,
+    calls.join(' | '));
+  const txt = w.PSP_APP.exportText();
+  check('Offline: Export nennt Quelle und Stand', txt.includes('Quelle: OSM (Offline-Daten), Stand 2026-11-24'));
+  check('Offline: Tabelle zeigt Quelle „Offline-Daten“', /Offline-Daten/.test(doc.getElementById('tbody').textContent));
+  check('Offline: kein Routenverlauf in Anfragen an die Offline-Daten', calls.every(u => !u.includes('around')));
+  // „Alle Punkte“ / größere Entfernung: abgedeckte Abschnitte zählen nicht für die Overpass-Rückfrage
+  let asked = 0;
+  w.confirm = () => { asked++; return true; };
+  const waitIdleX = async () => { await sleep(20); for (let i = 0; i < 6000 && w.PSP_APP.state.busy; i++) await sleep(100); };
+  calls.length = 0;
+  doc.getElementById('allPoints').checked = true; w.PSP_APP.onSettingsChanged(); await waitIdleX();
+  doc.getElementById('offTrack').value = 1000; w.PSP_APP.onSettingsChanged(); await waitIdleX();
+  check('Offline: „Alle Punkte“ + größere Entfernung → keine Overpass-Rückfrage, keine Overpass-Anfrage', asked === 0 && nIp() === 0,
+    asked + ' Rückfragen, ' + nIp() + ' Anfragen');
+  doc.getElementById('allPoints').checked = false; doc.getElementById('offTrack').value = 300;
+  w.PSP_APP.onSettingsChanged(); await waitIdleX();
+
+  // Filter „nur offen“ (je Typ, Fahrtag Mo 23.11.2026): Café Sonne (Mo zu) und Kiosk am See (ohne Zeiten) fallen raus
+  check('Offline: Filter „nur offen“ hat keine Checkbox für Wasser, aber für die anderen Typen',
+    !doc.getElementById('oh_water') && ['shop', 'food', 'fuel'].every(t => doc.getElementById('oh_' + t) && !doc.getElementById('oh_' + t).checked));
+  calls.length = 0;
+  doc.getElementById('oh_food').checked = true; doc.getElementById('oh_shop').checked = true;
+  w.PSP_APP.onSettingsChanged(); await waitIdleX();
+  const selF = sel();
+  check('Offline: Filter „nur offen“ – Café Sonne und Kiosk nicht mehr gewählt, Rest unverändert',
+    selF === 'food@10,fuel@11,shop@4,shop@9,water@15', selF);
+  const cafe = st.cands.find(c => c.name === 'Café Sonne');
+  check('Offline: Filter „nur offen“ – ausgefilterte Punkte bleiben als Kandidaten sichtbar und markiert',
+    st.cands.length === 9 && cafe && cafe.filtered && doc.querySelector('#tbody tr[data-id="' + cafe.id + '"]').classList.contains('filtered')
+    && /2 wegen „nur offen“ nicht automatisch gewählt/.test(doc.getElementById('countInfo').textContent), doc.getElementById('countInfo').textContent);
+  check('Offline: Filter „nur offen“ – Wasser unberührt, keine Netz-Anfrage', st.cands.filter(c => c.type === 'water').every(c => !c.filtered) && nIp() === 0);
+  check('Offline: Filter „nur offen“ – Lückenwarnung für Restaurant', /Restaurant:.*längste Lücke/.test(doc.getElementById('warnings').textContent),
+    doc.getElementById('warnings').textContent);
+  check('Offline: Filter „nur offen“ wird gespeichert', (() => { const c = JSON.parse(w.localStorage.getItem('pitstopplanner-settings-v1'));
+    return c.types.food.onlyOpen === true && c.types.shop.onlyOpen === true && !c.types.fuel.onlyOpen && !c.types.water.onlyOpen; })());
+  // manuell darf ein ausgefilterter Punkt trotzdem übernommen werden
+  doc.querySelector('#tbody tr[data-id="' + cafe.id + '"] input').click();
+  check('Offline: Filter „nur offen“ – ausgefilterter Punkt manuell übernehmbar', w.PSP_APP.currentExportPoints().some(p => p.name === 'Café Sonne'));
+  st.overrides.clear();
+  doc.getElementById('oh_food').checked = false; doc.getElementById('oh_shop').checked = false;
+  w.PSP_APP.onSettingsChanged(); await waitIdleX();
+  check('Offline: Filter aus → Auswahl wie vorher', sel() === EXPECTED, sel());
+
+  // B: zweite Hälfte nicht abgedeckt (z. B. Grenze) → nur dieser Abschnitt über Overpass, Auswahl unverändert
+  const endLon = +P.gridKey(F.posAt(20).lat, F.posAt(20).lon).split('_')[1];   // Zelle am Routenende
+  index = makeIndex(allKeys.filter(k => +k.split('_')[1] < endLon));
+  reset();
+  await w.PSP_APP.search(true);
+  check('Offline: teilweise abgedeckt → gemischt lokal + Overpass', chips().includes('local') && chips().includes('done') && nIp() >= 1,
+    chips().join(',') + ' / ' + nIp() + ' Anfragen');
+  check('Offline: teilweise abgedeckt → Auswahl unverändert', sel() === EXPECTED, sel());
+
+  // C: Index nicht erreichbar → Overpass wie bisher, Hinweis im Log
+  index = makeIndex(allKeys); indexStatus = 503;
+  reset();
+  await w.PSP_APP.search(true);
+  check('Offline: Index nicht erreichbar → Overpass, Log-Hinweis', nIp() >= 1 && chips().every(c => c === 'done' || c === '')
+    && /Offline-Daten nicht verfügbar/.test(doc.getElementById('log').textContent), chips().join(','));
+  check('Offline: Index nicht erreichbar → Auswahl unverändert', sel() === EXPECTED, sel());
+  indexStatus = 200;
+
+  // D: Checkbox aus → keine Anfrage an die Offline-Daten
+  doc.getElementById('useExtract').checked = false; w.PSP_APP.onSettingsChanged(); await sleep(20);
+  for (let i = 0; i < 6000 && w.PSP_APP.state.busy; i++) await sleep(100);
+  reset();
+  await w.PSP_APP.search(true);
+  check('Offline: Checkbox aus → nur Overpass', nIp() >= 1 && !calls.some(u => u.includes('pitstopplanner-data')), calls.length);
+  check('Offline: Einstellung wird gespeichert', JSON.parse(w.localStorage.getItem('pitstopplanner-settings-v1')).useExtract === false);
+  frame.remove();
+}
+
 /* ---------- m11: Leaflet fehlt (CDN blockiert) → sichtbare Fehlermeldung statt toter Seite ---------- */
 async function cdnFailureCheck(appHtml) {
   // App ohne Leaflet-<script> laden, als wäre cdnjs nicht erreichbar; Fehler der Inline-Skripte mitschreiben
@@ -348,6 +485,19 @@ async function cdnFailureCheck(appHtml) {
   check('m11: ohne Leaflet → Meldung „Kartenbibliothek konnte nicht geladen werden“', /Kartenbibliothek konnte nicht geladen werden/.test(info), info);
   check('m11: ohne Leaflet → kein Skriptfehler der App', appErrs.length === 0, appErrs.join(' | '));
   frame.remove();
+}
+
+/*
+ * Die App-iframes teilen localStorage mit dieser Seite. Läuft der Test über denselben Server wie die App
+ * (z. B. http://localhost:8765), würden sonst die eigenen Einstellungen des Nutzers gelesen und überschrieben.
+ * → vorher sichern, je iframe leeren, am Ende wiederherstellen.
+ */
+const SETTINGS_KEY = 'pitstopplanner-settings-v1';
+let savedUserSettings;
+function clearAppSettings() { try { localStorage.removeItem(SETTINGS_KEY); } catch (e) { /* kein Speicher */ } }
+function saveUserSettings() { try { savedUserSettings = localStorage.getItem(SETTINGS_KEY); } catch (e) { savedUserSettings = null; } }
+function restoreUserSettings() {
+  try { if (savedUserSettings == null) localStorage.removeItem(SETTINGS_KEY); else localStorage.setItem(SETTINGS_KEY, savedUserSettings); } catch (e) { /* kein Speicher */ }
 }
 
 async function run(appHtml, gpxText, gpxName) {
@@ -371,8 +521,11 @@ async function run(appHtml, gpxText, gpxName) {
     exportChecks(P, gpxName, gpxText, sampleFor(P, parsed.pts));
   }
   if (!params.has('noe2e')) {
+    saveUserSettings();
     try { await cdnFailureCheck(appHtml); } catch (e) { check('m11: ohne Ausnahme durchgelaufen', false, e.message); }
     try { await e2e(F); } catch (e) { check('E2E: ohne Ausnahme durchgelaufen', false, e.message); }
+    try { await e2eExtract(F); } catch (e) { check('Offline: ohne Ausnahme durchgelaufen', false, e.message); }
+    restoreUserSettings();
   }
   const fail = results.filter(r => !r[0]).length;
   const summary = document.createElement('h2');

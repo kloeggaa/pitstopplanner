@@ -9,7 +9,11 @@
 
 1. GPX-Datei laden (z. B. Komoot-Export) – Track oder Route, Länge und Anstieg werden angezeigt.
 2. Typen wählen (Wasser, Einkauf, Restaurant/Café, Tankstelle) und je Typ den **max. Abstand** zwischen zwei Stopps.
-3. **Versorgungspunkte suchen:** Daten kommen aus OpenStreetMap (Overpass-API, Fallback OpenFreeMap-Vektor-Tiles).
+   Optional je Typ (außer Wasser) **🕒 nur offen**: automatisch gewählt werden dann nur Punkte, die laut Öffnungszeiten
+   am Fahrtag geöffnet haben. Punkte ohne Öffnungszeiten bleiben als graue Kandidaten sichtbar und können manuell übernommen werden.
+3. **Versorgungspunkte suchen:** Daten kommen aus OpenStreetMap – wo vorhanden aus vorberechneten
+   [Offline-Daten](https://github.com/kloeggaa/pitstopplanner-data) (derzeit Schweiz, Liechtenstein, Österreich, Deutschland, Frankreich, Italien; wöchentlich aktualisiert),
+   sonst über die Overpass-API (Fallback OpenFreeMap-Vektor-Tiles). Abschalten: „Offline-Daten verwenden, wo verfügbar“.
    Die Auswahl springt jeweils um den max. Abstand nach vorn und sucht von dort rückwärts den letzten Punkt davor.
    Öffnungszeiten werden für den gewählten **Fahrtag** ausgewertet.
 4. Auswahl anpassen: Punkte in der Tabelle oder per Klick auf der Karte hinzufügen/entfernen.
@@ -27,7 +31,11 @@ fehlen die Kandidaten. Solche Routen am besten in einzelne A→B-Abschnitte teil
 ## Datenschutz & Fair Use
 
 - Auswahl und Export laufen lokal im Browser, die GPX-Datei selbst wird nicht hochgeladen.
-- **Für die Suche wird aber der Routenverlauf** (vereinfacht auf ca. 25 m, abschnittsweise) an öffentliche Overpass-Server
+- **Offline-Daten** (derzeit Schweiz, Liechtenstein, Österreich, Deutschland, Frankreich, Italien): Es werden nur Gitterzellen von ca. 11 × 8 km von GitHub Pages
+  (`kloeggaa.github.io/pitstopplanner-data`) geladen – der Routenverlauf wird dabei nicht gesendet. Ein Abschnitt
+  nutzt sie nur, wenn alle seine Zellen vollständig innerhalb der abgedeckten Länder liegen (Grenzen zwischen zwei
+  abgedeckten Ländern sind kein Problem); Abschnitte an der Außengrenze und in anderen Ländern gehen weiter an Overpass. Stand der Daten: siehe Log bzw. Wegpunkt-Beschreibung.
+- **Sonst wird für die Suche der Routenverlauf** (vereinfacht auf ca. 25 m, abschnittsweise) an öffentliche Overpass-Server
   gesendet: `overpass-api.de` (Deutschland), bei Störungen ersatzweise `overpass.private.coffee` und `maps.mail.ru`
   (VK, Russland). Beginnt die Route an der eigenen Wohnung, ist diese daraus ablesbar – ggf. Start/Ende vorher kürzen.
 - Im Fallback werden Vektor-Kacheln entlang der Route von OpenFreeMap geladen; die Kartenanzeige lädt Kacheln von
