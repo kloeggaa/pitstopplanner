@@ -5,6 +5,22 @@
 
 👉 **Online nutzen:** https://kloeggaa.github.io/pitstopplanner/
 
+![PitStopPlanner: Route Zürich–Mailand mit automatisch gewählten Einkaufsstopps alle ≤ 30 km](docs/screenshot.jpg)
+
+*Beispiel: Route Zürich → Mailand (297 km), gesucht wird nur „Einkauf“ mit max. 30 km Abstand und „🕒 nur offen“.*
+
+- **Links – Route & Einstellungen:** geladene GPX-Datei mit Länge und Anstieg; je Typ ein- oder ausschalten,
+  max. Abstand zwischen zwei Stopps, Filter „🕒 nur offen“, max. Entfernung vom Track, Fahrtag (für die
+  Öffnungszeiten), Fahrtrichtung, Offline-Daten an/aus. Darunter der Export als GPX oder Markdown.
+- **Karte:** der Track (lila, Start grün, Ziel schwarz) mit den gewählten Stopps als farbige Punkte
+  (hier grün = Einkauf). Graue Punkte sind weitere Kandidaten – ein Klick übernimmt sie in den Export.
+  Die breiten Bänder entlang des Tracks zeigen, welche Abschnitte schon geladen sind.
+- **Datenabruf:** ein Kästchen je ~10-km-Abschnitt. Türkis = aus den Offline-Daten, grün = über Overpass,
+  violett = über Vektor-Tiles, rot = fehlgeschlagen, grau = für diese Auswahl nicht benötigt. Im Log: Quelle und Anzahl der Punkte
+  je Abschnitt – hier `0 Overpass-Anfrage(n)`, die ganze Route kam aus den Offline-Daten.
+- **Unter der Karte** (nicht im Bild): Tabelle aller Kandidaten mit km, Name, Öffnungszeiten am Fahrtag,
+  Abstand zum Track und Quelle – Häkchen setzen oder entfernen, um die Auswahl anzupassen.
+
 ## Was es macht
 
 1. GPX-Datei laden (z. B. Komoot-Export) – Track oder Route, Länge und Anstieg werden angezeigt.
