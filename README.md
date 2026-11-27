@@ -11,13 +11,13 @@
 
 - **Links – Route & Einstellungen:** geladene GPX-Datei mit Länge und Anstieg; je Typ ein- oder ausschalten,
   max. Abstand zwischen zwei Stopps, Filter „🕒 nur offen“, max. Entfernung vom Track, Fahrtag (für die
-  Öffnungszeiten), Fahrtrichtung, Offline-Daten an/aus. Darunter der Export als GPX oder Markdown.
+  Öffnungszeiten), Fahrtrichtung, eigene Datenbank an/aus. Darunter der Export als GPX oder Markdown.
 - **Karte:** der Track (lila, Start grün, Ziel schwarz) mit den gewählten Stopps als farbige Punkte
   (hier grün = Einkauf). Graue Punkte sind weitere Kandidaten – ein Klick übernimmt sie in den Export.
   Die breiten Bänder entlang des Tracks zeigen, welche Abschnitte schon geladen sind.
-- **Datenabruf:** ein Kästchen je ~10-km-Abschnitt. Türkis = aus den Offline-Daten, grün = über Overpass,
+- **Datenabruf:** ein Kästchen je ~10-km-Abschnitt. Türkis = aus der eigenen Datenbank, grün = über Overpass,
   violett = über Vektor-Tiles, rot = fehlgeschlagen, grau = für diese Auswahl nicht benötigt. Im Log: Quelle und Anzahl der Punkte
-  je Abschnitt – hier `0 Overpass-Anfrage(n)`, die ganze Route kam aus den Offline-Daten.
+  je Abschnitt – hier `0 Overpass-Anfrage(n)`, die ganze Route kam aus der eigenen Datenbank.
 - **Unter der Karte** (nicht im Bild): Tabelle aller Kandidaten mit km, Name, Öffnungszeiten am Fahrtag,
   Abstand zum Track und Quelle – Häkchen setzen oder entfernen, um die Auswahl anzupassen.
 
@@ -27,9 +27,9 @@
 2. Typen wählen (Wasser, Einkauf, Restaurant/Café, Tankstelle) und je Typ den **max. Abstand** zwischen zwei Stopps.
    Optional je Typ (außer Wasser) **🕒 nur offen**: automatisch gewählt werden dann nur Punkte, die laut Öffnungszeiten
    am Fahrtag geöffnet haben. Punkte ohne Öffnungszeiten bleiben als graue Kandidaten sichtbar und können manuell übernommen werden.
-3. **Versorgungspunkte suchen:** Daten kommen aus OpenStreetMap – wo vorhanden aus vorberechneten
-   [Offline-Daten](https://github.com/kloeggaa/pitstopplanner-data) (derzeit Schweiz, Liechtenstein, Österreich, Deutschland, Frankreich, Italien; wöchentlich aktualisiert),
-   sonst über die Overpass-API (Fallback OpenFreeMap-Vektor-Tiles). Abschalten: „Offline-Daten verwenden, wo verfügbar“.
+3. **Versorgungspunkte suchen:** Daten kommen aus OpenStreetMap – wo vorhanden aus der vorberechneten
+   [eigenen Datenbank](https://github.com/kloeggaa/pitstopplanner-data) (derzeit Schweiz, Liechtenstein, Österreich, Deutschland, Frankreich, Italien; wöchentlich aktualisiert),
+   sonst über die Overpass-API (Fallback OpenFreeMap-Vektor-Tiles). Abschalten: „Eigene Datenbank verwenden, wo verfügbar“.
    Die Auswahl springt jeweils um den max. Abstand nach vorn und sucht von dort rückwärts den letzten Punkt davor.
    Öffnungszeiten werden für den gewählten **Fahrtag** ausgewertet.
 4. Auswahl anpassen: Punkte in der Tabelle oder per Klick auf der Karte hinzufügen/entfernen.
@@ -47,7 +47,7 @@ fehlen die Kandidaten. Solche Routen am besten in einzelne A→B-Abschnitte teil
 ## Datenschutz & Fair Use
 
 - Auswahl und Export laufen lokal im Browser, die GPX-Datei selbst wird nicht hochgeladen.
-- **Offline-Daten** (derzeit Schweiz, Liechtenstein, Österreich, Deutschland, Frankreich, Italien): Es werden nur Gitterzellen von ca. 11 × 8 km von GitHub Pages
+- **Eigene Datenbank** (derzeit Schweiz, Liechtenstein, Österreich, Deutschland, Frankreich, Italien): Es werden nur Gitterzellen von ca. 11 × 8 km von GitHub Pages
   (`kloeggaa.github.io/pitstopplanner-data`) geladen – der Routenverlauf wird dabei nicht gesendet. Ein Abschnitt
   nutzt sie nur, wenn alle seine Zellen vollständig innerhalb der abgedeckten Länder liegen (Grenzen zwischen zwei
   abgedeckten Ländern sind kein Problem); Abschnitte an der Außengrenze und in anderen Ländern gehen weiter an Overpass. Stand der Daten: siehe Log bzw. Wegpunkt-Beschreibung.

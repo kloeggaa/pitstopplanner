@@ -133,12 +133,12 @@
       <div class="row"><label for="rideDate">Fahrtag</label><input type="date" id="rideDate"></div>
       <div class="row"><label><input type="checkbox" id="reverse"> Route umkehren</label></div>
       <div class="row"><label><input type="checkbox" id="allPoints"> Alle Punkte (ohne Abstandsregel)</label></div>
-      <div class="row"><label title="Vorberechneter OSM-Auszug (derzeit CH, LI, AT, DE, FR, IT), wöchentlich aktualisiert. Aus: immer live über Overpass."><input type="checkbox" id="useExtract" checked> Offline-Daten verwenden, wo verfügbar</label></div>
+      <div class="row"><label title="Vorberechneter OSM-Auszug (derzeit CH, LI, AT, DE, FR, IT), wöchentlich aktualisiert. Aus: immer live über Overpass."><input type="checkbox" id="useExtract" checked> Eigene Datenbank verwenden, wo verfügbar</label></div>
       <div class="btns">
         <button id="searchBtn" disabled>Versorgungspunkte suchen</button>
         <button id="cancelBtn" class="secondary hidden">Abbrechen</button>
       </div>
-      <p class="muted" style="font-size:12px;margin:8px 0 0">Hinweis: Wo Offline-Daten vorliegen (derzeit CH, LI, AT, DE, FR, IT), werden nur grobe
+      <p class="muted" style="font-size:12px;margin:8px 0 0">Hinweis: Wo die eigene Datenbank Daten enthält (derzeit CH, LI, AT, DE, FR, IT), werden nur grobe
         Kartenzellen geladen. Sonst wird der Routenverlauf (vereinfacht, ±25 m) an öffentliche Overpass-Server gesendet. Details unten auf der Seite.</p>
     </section>
 
@@ -184,11 +184,11 @@
 
 <footer class="muted" style="padding: 0 16px 24px; font-size: 12px;">
   Daten &copy; <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a>-Mitwirkende (ODbL),
-  aus vorberechneten <a href="https://github.com/kloeggaa/pitstopplanner-data" target="_blank" rel="noopener">Offline-Daten</a> (derzeit Schweiz, Liechtenstein, Österreich, Deutschland, Frankreich, Italien; wöchentlich aktualisiert)
+  aus der vorberechneten <a href="https://github.com/kloeggaa/pitstopplanner-data" target="_blank" rel="noopener">eigenen Datenbank</a> (derzeit Schweiz, Liechtenstein, Österreich, Deutschland, Frankreich, Italien; wöchentlich aktualisiert)
   oder abgefragt über öffentliche, ehrenamtlich betriebene Overpass-Server – bitte sparsam suchen.
   Fallback-Daten und Karte: <a href="https://openfreemap.org" target="_blank" rel="noopener">OpenFreeMap</a>.<br>
   <b>Datenschutz:</b> Die GPX-Datei selbst wird nicht hochgeladen, Auswahl und Export laufen lokal im Browser.
-  Wo Offline-Daten vorliegen, werden nur Kartenzellen von ca. 11 × 8 km von GitHub Pages geladen (kein Routenverlauf).
+  Wo die eigene Datenbank Daten enthält, werden nur Kartenzellen von ca. 11 × 8 km von GitHub Pages geladen (kein Routenverlauf).
   Sonst wird für die Suche der <b>Routenverlauf</b> (vereinfacht auf ca. 25 m genau, abschnittsweise) an öffentliche Overpass-Server
   gesendet: overpass-api.de (Deutschland), bei Störungen ersatzweise overpass.private.coffee und maps.mail.ru (VK, Russland).
   Beginnt die Route an deiner Wohnung, ist diese daraus ablesbar – ggf. Start/Ende vorher kürzen.
@@ -604,7 +604,7 @@
     return [...out.values()];
   }
 
-  /* ---------- Offline-Daten (vorberechneter POI-Auszug, siehe pitstopplanner-data) ----------
+  /* ---------- eigene Datenbank (vorberechneter POI-Auszug, siehe pitstopplanner-data) ----------
    * Gitter aus EXTRACT_PER_DEG × EXTRACT_PER_DEG Zellen je Grad, Schlüssel "latIdx_lonIdx".
    * Je Zelle eine Datei {p:[Zeile…]}, Zeile = [id, lat, lon, type, label, name, opening_hours, addr:country]
    * (leere Felder am Ende weggelassen, id kompakt: n123 / w123 / r123).
@@ -648,7 +648,7 @@
   /** Quellen: Anzeige-Text und ob OSM-Tags (Öffnungszeiten) vorhanden sind */
   const SOURCES = {
     overpass: { short: 'Overpass', long: 'OSM (Overpass)', tags: true },
-    extract:  { short: 'Offline-Daten', long: 'OSM (Offline-Daten)', tags: true },
+    extract:  { short: 'Eigene Datenbank', long: 'OSM (eigene Datenbank)', tags: true },
     tiles:    { short: 'Vektor-Tiles', long: 'OSM (Vektor-Tiles)', tags: false },
   };
   const sourceInfo = s => SOURCES[s] || SOURCES.tiles;
@@ -663,7 +663,7 @@
    * Erwartet Objekte {type, lat, lon, source, name}.
    */
   function dedupe(points, radiusM = 60) {
-    const rank = p => (sourceInfo(p.source).tags ? 0 : 1);   // Overpass / Offline-Daten vor Vektor-Tiles
+    const rank = p => (sourceInfo(p.source).tags ? 0 : 1);   // Overpass / eigene Datenbank vor Vektor-Tiles
     const sorted = points.slice().sort((a, b) => rank(a) - rank(b));
     const kept = [];
     const cell = 0.001, grid = new Map(); // ~110 m Zellen
@@ -1056,7 +1056,7 @@
   /* ---------- Zustand ---------- */
   const state = {
     fileName: null, text: null, encoding: 'utf-8', origPts: null, track: null,
-    raw: [],               // klassifizierte Rohpunkte aus Offline-Daten / Overpass / Tiles (nach Dedupe)
+    raw: [],               // klassifizierte Rohpunkte aus der eigenen Datenbank / Overpass / Tiles (nach Dedupe)
     seg: null,             // Abschnitts-Cache (siehe ensureSegCache)
     searched: false,       // wurde für diese Datei schon gesucht?
     cands: [],             // Kandidaten innerhalb der Track-Entfernung (mit km, Abstand, Zeiten)
@@ -1066,7 +1066,7 @@
     busy: false, cancel: false, controller: null,
     cooldownUntil: 0,      // bis wann Overpass ganz pausiert (alle Server gesperrt / Schutzschalter), gilt über Läufe hinweg
     epDownUntil: OVERPASS_ENDPOINTS.map(() => 0),   // je Server: pausiert bis (nach 429 / Netzwerkfehler), gilt über Läufe hinweg
-    // Offline-Daten: index = undefined (noch nicht geladen) | null (nicht verfügbar) | Index-Objekt; tiles: Zelle → Punkte
+    // eigene Datenbank: index = undefined (noch nicht geladen) | null (nicht verfügbar) | Index-Objekt; tiles: Zelle → Punkte
     extract: { index: undefined, loading: null, date: '', tiles: new Map() },
   };
 
@@ -1342,7 +1342,7 @@
     const fetched = [...state.seg.data.values()].filter(d => d.size).length;
     let txt = 'Abschnitte: ' + fetched + '/' + N + ' abgefragt';
     const parts = [];
-    if (n('local')) parts.push(n('local') + ' aus Offline-Daten');
+    if (n('local')) parts.push(n('local') + ' aus der eigenen Datenbank');
     if (n('tiles')) parts.push(n('tiles') + ' über Vektor-Tiles');
     if (n('failed')) parts.push(n('failed') + ' fehlgeschlagen');
     if (!state.busy && fetched < N) parts.push((N - fetched) + ' nicht benötigt');
@@ -1371,7 +1371,7 @@
   const cancellableSleep = async ms => { for (let w = 0; w < ms / 100 && !state.cancel; w++) await sleep(100); };
   let epStart = 0; // zuletzt erfolgreicher Endpunkt wird zuerst probiert
 
-  /* ---------- Offline-Daten (statische Gitter-Dateien, kein Routenverlauf wird gesendet) ---------- */
+  /* ---------- eigene Datenbank (statische Gitter-Dateien, kein Routenverlauf wird gesendet) ---------- */
   const extractSignal = () => (typeof AbortSignal !== 'undefined' && AbortSignal.timeout ? AbortSignal.timeout(20000) : undefined);
   /** Index einmal je Sitzung laden; null = nicht verfügbar (dann Overpass) */
   async function extractIndex() {
@@ -1386,24 +1386,24 @@
           throw new Error('unbekanntes Format');
         const dates = (idx.sources || []).map(s => String(s.osmTimestamp || '').slice(0, 10)).filter(d => /^\d{4}-\d\d-\d\d$/.test(d)).sort();
         X.date = dates[0] || String(idx.built || '').slice(0, 10);
-        log('Offline-Daten verfügbar: ' + (idx.sources || []).map(s => String(s.id).toUpperCase()).join(', ')
+        log('Eigene Datenbank verfügbar: ' + (idx.sources || []).map(s => String(s.id).toUpperCase()).join(', ')
           + ' (OSM-Stand ' + X.date + ', ' + Object.keys(idx.tiles).length + ' Zellen) – übrige Gebiete über Overpass');
         return idx;
       } catch (e) {
-        log('Offline-Daten nicht verfügbar (' + e.message + ') – Suche über Overpass');
+        log('Eigene Datenbank nicht verfügbar (' + e.message + ') – Suche über Overpass');
         return null;
       } finally { X.loading = null; }
     })();
     X.index = await X.loading;
     return X.index;
   }
-  /** deckt der bereits geladene Offline-Index diese Bounding Box vollständig ab? (synchron, ohne Netz) */
+  /** deckt der bereits geladene Datenbank-Index diese Bounding Box vollständig ab? (synchron, ohne Netz) */
   function extractCovers(bbox) {
     const idx = state.applied.useExtract && state.extract.index;
     return !!idx && P.gridKeysForBbox(bbox).every(k => Object.prototype.hasOwnProperty.call(idx.tiles, k));
   }
   /**
-   * Punkte eines Abschnitts aus den Offline-Daten (alle Typen) oder null, wenn seine Bounding Box nicht
+   * Punkte eines Abschnitts aus der eigenen Datenbank (alle Typen) oder null, wenn seine Bounding Box nicht
    * VOLLSTÄNDIG abgedeckt ist (z. B. Grenznähe, anderes Land). Wirft bei Netzwerk-/Formatfehlern.
    */
   async function fetchExtract(o) {
@@ -1430,7 +1430,7 @@
   }
 
   /**
-   * Einen Abschnitt abfragen: zuerst Offline-Daten (falls aktiviert und das Gebiet vollständig abgedeckt ist),
+   * Einen Abschnitt abfragen: zuerst eigene Datenbank (falls aktiviert und das Gebiet vollständig abgedeckt ist),
    * sonst Overpass (Endpunkt-Failover, bis zu 4 Wiederholungsrunden mit Backoff).
    * Bei 429 / "Failed to fetch" wird nur dieser Server für COOLDOWN_S pausiert und der nächste probiert;
    * erst wenn alle Server pausiert sind (oder der Schutzschalter greift) → Vektor-Tiles.
@@ -1442,14 +1442,14 @@
       try {
         const pts = await fetchExtract(o);
         if (pts) {
-          // Offline-Daten enthalten alle Typen → Abschnitt gleich für alle Typen erledigt
+          // die eigene Datenbank enthält alle Typen → Abschnitt gleich für alle Typen erledigt
           storeSegment(o, P.TYPE_ORDER, pts);
-          setStatus(o, 'local', 'Offline-Daten (OSM-Stand ' + state.extract.date + '), ' + pts.length + ' Punkte');
-          log(label + ': aus Offline-Daten (' + pts.length + ' Punkte)');
+          setStatus(o, 'local', 'Eigene Datenbank (OSM-Stand ' + state.extract.date + '), ' + pts.length + ' Punkte');
+          log(label + ': aus der eigenen Datenbank (' + pts.length + ' Punkte)');
           return;
         }
       } catch (e) {
-        log(label + ': Offline-Daten fehlgeschlagen (' + e.message + ') – Overpass wird verwendet');
+        log(label + ': Eigene Datenbank fehlgeschlagen (' + e.message + ') – Overpass wird verwendet');
       }
       if (state.cancel) return;
     }
@@ -1535,7 +1535,7 @@
     $('searchBtn').disabled = true; $('cancelBtn').classList.remove('hidden');
     $('progress').classList.remove('hidden');
     if (manual) { state.seg = null; state.overrides.clear(); $('log').textContent = ''; }
-    if (manual && state.extract.index === null) state.extract.index = undefined;   // Offline-Index erneut versuchen
+    if (manual && state.extract.index === null) state.extract.index = undefined;   // Datenbank-Index erneut versuchen
     state.searched = true;
     try {
       ensureSegCache();
@@ -1809,7 +1809,7 @@
     // fehlgeschlagene Abschnitte bei jeder Änderung erneut versuchen (Overpass respektiert dabei den Cooldown)
     if (!needs.length && !marginTooSmall && !failedCount()) return;
     // Wie viele Abschnitte fehlen mindestens? (bei „Alle Punkte“ exakt, sonst nach unten geschätzt)
-    // Abschnitte, die die Offline-Daten abdecken, belasten Overpass nicht → nicht mitzählen
+    // Abschnitte, die die eigene Datenbank abdeckt, belasten Overpass nicht → nicht mitzählen
     let missing = 0;
     if (marginTooSmall)
       missing = P.splitSegments(state.origTrack, SEGMENT_KM, s.offTrack + EXTRA_MARGIN_M).filter(sg => !extractCovers(sg.bbox)).length;
