@@ -56,6 +56,10 @@ fehlen die Kandidaten. Solche Routen am besten in einzelne A→B-Abschnitte teil
   (VK, Russland). Beginnt die Route an der eigenen Wohnung, ist diese daraus ablesbar – ggf. Start/Ende vorher kürzen.
 - Im Fallback werden Vektor-Kacheln entlang der Route von OpenFreeMap geladen; die Kartenanzeige lädt Kacheln von
   OpenStreetMap bzw. OpenFreeMap.
+- **Besuchsstatistik:** Die Seite nutzt [Cloudflare Web Analytics](https://www.cloudflare.com/web-analytics/)
+  (`static.cloudflareinsights.com`) – ohne Cookies und ohne Fingerprinting, erfasst werden nur anonyme
+  Seitenaufrufe (Land, Browser, Gerätetyp, Herkunftsseite). Route und GPX-Inhalt werden dabei nicht übertragen.
+  Ein Werbe- oder Tracking-Blocker unterdrückt das Skript; die App funktioniert dann unverändert.
 - Overpass ist ein kostenloser, ehrenamtlich betriebener Dienst. Die App fragt deshalb nur die Abschnitte und
   Typen ab, die der Auswahl-Algorithmus wirklich braucht, nur im Korridor um die Route, wartet zwischen Anfragen,
   pausiert einen Overpass-Server nach einem Rate-Limit (HTTP 429) oder Netzwerkfehler für 2 Minuten und weicht auf
